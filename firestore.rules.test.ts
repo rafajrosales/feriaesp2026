@@ -1,0 +1,110 @@
+/**
+ * Suite de pruebas de seguridad TDD para Firestore Rules (Phase 0 - Dirty Dozen)
+ * Verifica que los 12 ataques de identidad, integridad y estado devuelvan PERMISSION_DENIED.
+ */
+
+export const DIRTY_DOZEN_SECURITY_CASES = [
+  {
+    id: 1,
+    name: 'Anonymous list on estudiantes',
+    auth: null,
+    operation: 'list',
+    path: 'estudiantes',
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 2,
+    name: 'Anonymous write on estudiantes/26316070010042',
+    auth: null,
+    operation: 'create',
+    path: 'estudiantes/26316070010042',
+    payload: { num_control: '26316070010042', nombre_completo: 'Test' },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 3,
+    name: 'Identity spoofing with mismatched ownerUid',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'create',
+    path: 'estudiantes/26316070019999',
+    payload: { num_control: '26316070019999', ownerUid: 'victim-uid-2' },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 4,
+    name: 'Email spoofing with email_verified=false for admin email',
+    auth: { uid: 'attacker-uid', email: 'rafajrosales@gmail.com', email_verified: false },
+    operation: 'list',
+    path: 'docentes',
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 5,
+    name: 'Shadow update injecting ghost field role/isAdmin',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'update',
+    path: 'estudiantes/26316070019999',
+    payload: { isAdmin: true },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 6,
+    name: 'Immutable ownerUid tampering during update',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'update',
+    path: 'evaluaciones/26316070019999',
+    payload: { ownerUid: 'other-uid' },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 7,
+    name: 'Client-forged createdAt timestamp not equal to request.time',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'create',
+    path: 'estudiantes/26316070019999',
+    payload: { createdAt: '2020-01-01T00:00:00Z' },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 8,
+    name: 'Modification after terminal state COMPLETADO in progresos',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'update',
+    path: 'progresos/26316070019999',
+    payload: { estatus_fase_virtual: 'EN_PROCESO' },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 9,
+    name: 'Resource poisoning with invalid doc ID characters',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'create',
+    path: 'estudiantes/invalid$id!with*chars',
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 10,
+    name: 'Oversized analisis_pedagogico (>2000 chars) on evaluaciones',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'create',
+    path: 'evaluaciones/26316070019999',
+    payload: { analisis_pedagogico: 'A'.repeat(3000) },
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 11,
+    name: 'Unfiltered list query by non-admin on evaluaciones',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'list',
+    path: 'evaluaciones',
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 12,
+    name: 'Non-admin read or write on confidential docentes collection',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'get',
+    path: 'docentes/DOC-2026-001',
+    expected: 'PERMISSION_DENIED'
+  }
+];

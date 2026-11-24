@@ -1,0 +1,451 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -----------------------------------------------------------------
+    // Global Hardened Helpers
+    // -----------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'rafajrosales@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isOwner(ownerUid) {
+      return isVerifiedUser() && ownerUid == request.auth.uid;
+    }
+
+    function isValidSpecialty(val) {
+      return val is string && val in ['programacion', 'comercio', 'rrhh', 'cosmetologia'];
+    }
+
+    // -----------------------------------------------------------------
+    // Validation Blueprints
+    // -----------------------------------------------------------------
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.role == 'admin'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTutorLegal(tutor) {
+      return tutor is map
+        && tutor.keys().hasAll(['nombre_tutor', 'parentesco', 'correo_tutor', 'telefono_tutor', 'verificado'])
+        && tutor.keys().hasOnly([
+          'nombre_tutor', 'parentesco', 'correo_tutor', 'telefono_tutor',
+          'verificado', 'fecha_verificacion', 'firma_digital', 'token_verificacion'
+        ])
+        && tutor.nombre_tutor is string && tutor.nombre_tutor.size() >= 1 && tutor.nombre_tutor.size() <= 150
+        && tutor.parentesco is string && tutor.parentesco in ['Padre', 'Madre', 'Tutor Legal']
+        && tutor.correo_tutor is string && tutor.correo_tutor.size() >= 3 && tutor.correo_tutor.size() <= 150
+        && tutor.telefono_tutor is string && tutor.telefono_tutor.size() >= 1 && tutor.telefono_tutor.size() <= 30
+        && tutor.verificado is bool
+        && (!('fecha_verificacion' in tutor) || (tutor.fecha_verificacion is string && tutor.fecha_verificacion.size() <= 64))
+        && (!('firma_digital' in tutor) || (tutor.firma_digital is string && tutor.firma_digital.size() <= 100000))
+        && (!('token_verificacion' in tutor) || (tutor.token_verificacion is string && tutor.token_verificacion.size() <= 128));
+    }
+
+    function isValidEstudiante(data) {
+      return data.keys().hasAll([
+          'num_control', 'nombre_completo', 'grupo', 'turno',
+          'correo_institucional', 'curp', 'tutor', 'ownerUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'num_control', 'nombre_completo', 'grupo', 'turno',
+          'correo_institucional', 'curp', 'avatar_url', 'telefono_alumno',
+          'tutor', 'ownerUid', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.num_control) && data.num_control.size() >= 4 && data.num_control.size() <= 64
+        && data.nombre_completo is string && data.nombre_completo.size() >= 2 && data.nombre_completo.size() <= 150
+        && data.grupo is string && data.grupo.size() >= 1 && data.grupo.size() <= 20
+        && data.turno is string && data.turno in ['MATUTINO', 'VESPERTINO']
+        && data.correo_institucional is string && data.correo_institucional.size() >= 3 && data.correo_institucional.size() <= 150
+        && data.curp is string && data.curp.size() >= 10 && data.curp.size() <= 20
+        && (!('avatar_url' in data) || (data.avatar_url is string && data.avatar_url.size() <= 500))
+        && (!('telefono_alumno' in data) || (data.telefono_alumno is string && data.telefono_alumno.size() <= 30))
+        && isValidTutorLegal(data.tutor)
+        && isValidId(data.ownerUid)
+        && (data.ownerUid == request.auth.uid || isAdmin())
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEvaluacion(data) {
+      return data.keys().hasAll([
+          'num_control', 'ownerUid',
+          'score_aptitud_programacion', 'score_gusto_programacion',
+          'score_aptitud_comercio', 'score_gusto_comercio',
+          'score_aptitud_rrhh', 'score_gusto_rrhh',
+          'score_aptitud_cosmetologia', 'score_gusto_cosmetologia',
+          'carrera_sugerida', 'analisis_pedagogico', 'fecha_evaluacion',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'num_control', 'ownerUid', 'version_test', 'total_reactivos',
+          'score_aptitud_programacion', 'score_gusto_programacion',
+          'score_aptitud_comercio', 'score_gusto_comercio',
+          'score_aptitud_rrhh', 'score_gusto_rrhh',
+          'score_aptitud_cosmetologia', 'score_gusto_cosmetologia',
+          'puntajes_especialidad', 'porcentajes_especialidad', 'desglose_partes',
+          'respuestas_detalle', 'especialidades_empatadas',
+          'carrera_sugerida', 'segunda_opcion', 'analisis_pedagogico',
+          'fecha_evaluacion', 'sincronizado_firestore', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.num_control) && data.num_control.size() >= 4 && data.num_control.size() <= 64
+        && isValidId(data.ownerUid)
+        && (data.ownerUid == request.auth.uid || isAdmin())
+        && (!('version_test' in data) || (data.version_test is string && data.version_test in ['40_REACTIVOS_2026', '8_REACTIVOS_LEGACY']))
+        && (!('total_reactivos' in data) || (data.total_reactivos is number && data.total_reactivos >= 1 && data.total_reactivos <= 100))
+        && data.score_aptitud_programacion is number && data.score_aptitud_programacion >= 0 && data.score_aptitud_programacion <= 100
+        && data.score_gusto_programacion is number && data.score_gusto_programacion >= 0 && data.score_gusto_programacion <= 100
+        && data.score_aptitud_comercio is number && data.score_aptitud_comercio >= 0 && data.score_aptitud_comercio <= 100
+        && data.score_gusto_comercio is number && data.score_gusto_comercio >= 0 && data.score_gusto_comercio <= 100
+        && data.score_aptitud_rrhh is number && data.score_aptitud_rrhh >= 0 && data.score_aptitud_rrhh <= 100
+        && data.score_gusto_rrhh is number && data.score_gusto_rrhh >= 0 && data.score_gusto_rrhh <= 100
+        && data.score_aptitud_cosmetologia is number && data.score_aptitud_cosmetologia >= 0 && data.score_aptitud_cosmetologia <= 100
+        && data.score_gusto_cosmetologia is number && data.score_gusto_cosmetologia >= 0 && data.score_gusto_cosmetologia <= 100
+        && (!('puntajes_especialidad' in data) || data.puntajes_especialidad is map)
+        && (!('porcentajes_especialidad' in data) || data.porcentajes_especialidad is map)
+        && (!('desglose_partes' in data) || data.desglose_partes is map)
+        && (!('respuestas_detalle' in data) || data.respuestas_detalle is map)
+        && (!('especialidades_empatadas' in data) || (
+          data.especialidades_empatadas is list
+          && data.especialidades_empatadas.size() >= 1
+          && data.especialidades_empatadas.size() <= 4
+          && data.especialidades_empatadas[0] is string
+          && data.especialidades_empatadas[0].size() <= 32
+        ))
+        && isValidSpecialty(data.carrera_sugerida)
+        && (!('segunda_opcion' in data) || isValidSpecialty(data.segunda_opcion))
+        && data.analisis_pedagogico is string && data.analisis_pedagogico.size() >= 1 && data.analisis_pedagogico.size() <= 2000
+        && data.fecha_evaluacion is string && data.fecha_evaluacion.size() >= 4 && data.fecha_evaluacion.size() <= 64
+        && (!('sincronizado_firestore' in data) || data.sincronizado_firestore is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProgreso(data) {
+      return data.keys().hasAll([
+          'num_control', 'ownerUid', 'test_vocacional_completado',
+          'progreso_especialidades', 'porcentaje_virtual', 'promedio_cuestionarios',
+          'clave_unica_token', 'estatus_fase_virtual', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'num_control', 'ownerUid', 'test_vocacional_completado',
+          'progreso_especialidades', 'porcentaje_virtual', 'promedio_cuestionarios',
+          'clave_unica_token', 'estatus_fase_virtual', 'fecha_termino', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.num_control) && data.num_control.size() >= 4 && data.num_control.size() <= 64
+        && isValidId(data.ownerUid)
+        && (data.ownerUid == request.auth.uid || isAdmin())
+        && data.test_vocacional_completado is bool
+        && data.progreso_especialidades is map
+        && data.porcentaje_virtual is number && data.porcentaje_virtual >= 0 && data.porcentaje_virtual <= 100
+        && data.promedio_cuestionarios is number && data.promedio_cuestionarios >= 0 && data.promedio_cuestionarios <= 100
+        && data.clave_unica_token is string && data.clave_unica_token.size() <= 128
+        && data.estatus_fase_virtual is string && data.estatus_fase_virtual in ['PENDIENTE', 'EN_PROCESO', 'COMPLETADO']
+        && (!('fecha_termino' in data) || (data.fecha_termino is string && data.fecha_termino.size() <= 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDocente(data) {
+      return data.keys().hasAll([
+          'id', 'nombre_completo', 'rfc', 'correo_institucional',
+          'academia', 'rol', 'clave_acceso', 'estatus_autorizacion',
+          'fecha_alta', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'nombre_completo', 'rfc', 'correo_institucional',
+          'academia', 'rol', 'clave_acceso', 'estatus_autorizacion',
+          'fecha_alta', 'registrado_por', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 3 && data.id.size() <= 64
+        && data.nombre_completo is string && data.nombre_completo.size() >= 2 && data.nombre_completo.size() <= 150
+        && data.rfc is string && data.rfc.size() >= 10 && data.rfc.size() <= 20
+        && data.correo_institucional is string && data.correo_institucional.size() >= 3 && data.correo_institucional.size() <= 150
+        && data.academia is string && data.academia in ['programacion', 'comercio', 'rrhh', 'cosmetologia', 'general']
+        && data.rol is string && data.rol in ['Profesor Titular', 'Jefe de Academia', 'Tutor Escolar', 'Subdirector']
+        && data.clave_acceso is string && data.clave_acceso.size() >= 4 && data.clave_acceso.size() <= 64
+        && data.estatus_autorizacion is string && data.estatus_autorizacion in ['AUTORIZADO', 'PENDIENTE', 'REVOCADO']
+        && data.fecha_alta is string && data.fecha_alta.size() <= 64
+        && (!('registrado_por' in data) || (data.registrado_por is string && data.registrado_por.size() <= 150))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCuestionario(data) {
+      return data.keys().hasAll([
+          'id', 'especialidad_id', 'titulo', 'descripcion',
+          'porcentaje_aprobatorio', 'activo', 'fecha_actualizacion',
+          'preguntas', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'especialidad_id', 'titulo', 'descripcion', 'instrucciones',
+          'porcentaje_aprobatorio', 'tiempo_limite_min', 'activo',
+          'fecha_actualizacion', 'autor_docente', 'preguntas', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 2 && data.id.size() <= 64
+        && isValidSpecialty(data.especialidad_id)
+        && data.titulo is string && data.titulo.size() >= 2 && data.titulo.size() <= 200
+        && data.descripcion is string && data.descripcion.size() >= 1 && data.descripcion.size() <= 1000
+        && (!('instrucciones' in data) || (data.instrucciones is string && data.instrucciones.size() <= 1000))
+        && data.porcentaje_aprobatorio is number && data.porcentaje_aprobatorio >= 0 && data.porcentaje_aprobatorio <= 100
+        && (!('tiempo_limite_min' in data) || (data.tiempo_limite_min is number && data.tiempo_limite_min >= 1 && data.tiempo_limite_min <= 300))
+        && data.activo is bool
+        && data.fecha_actualizacion is string && data.fecha_actualizacion.size() <= 64
+        && (!('autor_docente' in data) || (data.autor_docente is string && data.autor_docente.size() <= 150))
+        && data.preguntas is list && data.preguntas.size() <= 50
+        && (data.preguntas.size() == 0 || data.preguntas[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFichaAcademia(data) {
+      return data.keys().hasAll([
+          'especialidad_id', 'nombre_especialidad', 'presidente_academia',
+          'integrantes_academia', 'fecha_entrega', 'resumen_ejecutivo',
+          'recursos_multimedia', 'banco_reactivos',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'especialidad_id', 'nombre_especialidad', 'presidente_academia',
+          'integrantes_academia', 'fecha_entrega', 'resumen_ejecutivo',
+          'recursos_multimedia', 'banco_reactivos',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidSpecialty(data.especialidad_id)
+        && data.nombre_especialidad is string && data.nombre_especialidad.size() >= 2 && data.nombre_especialidad.size() <= 200
+        && data.presidente_academia is string && data.presidente_academia.size() >= 2 && data.presidente_academia.size() <= 150
+        && data.integrantes_academia is list && data.integrantes_academia.size() <= 30
+        && (data.integrantes_academia.size() == 0 || (data.integrantes_academia[0] is string && data.integrantes_academia[0].size() <= 150))
+        && data.fecha_entrega is string && data.fecha_entrega.size() <= 64
+        && data.resumen_ejecutivo is string && data.resumen_ejecutivo.size() >= 1 && data.resumen_ejecutivo.size() <= 3000
+        && data.recursos_multimedia is map
+        && data.banco_reactivos is list && data.banco_reactivos.size() <= 50
+        && (data.banco_reactivos.size() == 0 || data.banco_reactivos[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // -----------------------------------------------------------------
+    // Collection Rules
+    // -----------------------------------------------------------------
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && ((isVerifiedUser() && request.auth.uid == userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isAdmin()
+        && isValidAdminUser(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isAdmin()
+        && isValidAdminUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'updatedAt']);
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /estudiantes/{numControl} {
+      allow get: if isValidId(numControl) && (isOwner(existing().ownerUid) || isAdmin());
+      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
+      allow create: if isValidId(numControl)
+        && isVerifiedUser()
+        && isValidEstudiante(incoming())
+        && incoming().num_control == numControl
+        && (incoming().ownerUid == request.auth.uid || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(numControl)
+        && isVerifiedUser()
+        && isValidEstudiante(incoming())
+        && incoming().num_control == existing().num_control
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid) && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['nombre_completo', 'grupo', 'turno', 'telefono_alumno', 'avatar_url', 'tutor', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['tutor', 'updatedAt'])
+            )
+          )
+        );
+      allow delete: if isValidId(numControl) && isAdmin();
+    }
+
+    match /evaluaciones/{numControl} {
+      allow get: if isValidId(numControl) && (isOwner(existing().ownerUid) || isAdmin());
+      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
+      allow create: if isValidId(numControl)
+        && isVerifiedUser()
+        && isValidEvaluacion(incoming())
+        && incoming().num_control == numControl
+        && ((incoming().ownerUid == request.auth.uid && exists(/databases/$(database)/documents/estudiantes/$(numControl))) || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(numControl)
+        && isVerifiedUser()
+        && isValidEvaluacion(incoming())
+        && incoming().num_control == existing().num_control
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'version_test', 'total_reactivos',
+              'score_aptitud_programacion', 'score_gusto_programacion',
+              'score_aptitud_comercio', 'score_gusto_comercio',
+              'score_aptitud_rrhh', 'score_gusto_rrhh',
+              'score_aptitud_cosmetologia', 'score_gusto_cosmetologia',
+              'puntajes_especialidad', 'porcentajes_especialidad', 'desglose_partes',
+              'respuestas_detalle', 'especialidades_empatadas',
+              'carrera_sugerida', 'segunda_opcion', 'analisis_pedagogico',
+              'fecha_evaluacion', 'sincronizado_firestore', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(numControl) && isAdmin();
+    }
+
+    match /progresos/{numControl} {
+      allow get: if isValidId(numControl) && (isOwner(existing().ownerUid) || isAdmin());
+      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
+      allow create: if isValidId(numControl)
+        && isVerifiedUser()
+        && isValidProgreso(incoming())
+        && incoming().num_control == numControl
+        && ((incoming().ownerUid == request.auth.uid && exists(/databases/$(database)/documents/estudiantes/$(numControl))) || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(numControl)
+        && isVerifiedUser()
+        && isValidProgreso(incoming())
+        && incoming().num_control == existing().num_control
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().estatus_fase_virtual != 'COMPLETADO'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'test_vocacional_completado', 'progreso_especialidades',
+              'porcentaje_virtual', 'promedio_cuestionarios',
+              'clave_unica_token', 'estatus_fase_virtual',
+              'fecha_termino', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(numControl) && isAdmin();
+    }
+
+    match /docentes/{docenteId} {
+      allow get: if isValidId(docenteId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(docenteId)
+        && isAdmin()
+        && isValidDocente(incoming())
+        && incoming().id == docenteId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docenteId)
+        && isAdmin()
+        && isValidDocente(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'nombre_completo', 'rfc', 'correo_institucional', 'academia',
+          'rol', 'clave_acceso', 'estatus_autorizacion', 'registrado_por', 'updatedAt'
+        ]);
+      allow delete: if isValidId(docenteId) && isAdmin();
+    }
+
+    match /cuestionarios_especialidades/{cuestionarioId} {
+      allow get: if isValidId(cuestionarioId) && isVerifiedUser();
+      allow list: if (isVerifiedUser() && resource.data.activo == true) || isAdmin();
+      allow create: if isValidId(cuestionarioId)
+        && isAdmin()
+        && isValidCuestionario(incoming())
+        && incoming().id == cuestionarioId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(cuestionarioId)
+        && isAdmin()
+        && isValidCuestionario(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'especialidad_id', 'titulo', 'descripcion', 'instrucciones',
+          'porcentaje_aprobatorio', 'tiempo_limite_min', 'activo',
+          'fecha_actualizacion', 'autor_docente', 'preguntas', 'updatedAt'
+        ]);
+      allow delete: if isValidId(cuestionarioId) && isAdmin();
+    }
+
+    match /fichas_academia/{especialidadId} {
+      allow get: if isValidId(especialidadId) && isVerifiedUser();
+      allow list: if (isVerifiedUser() && resource.data.especialidad_id in ['programacion', 'comercio', 'rrhh', 'cosmetologia']) || isAdmin();
+      allow create: if isValidId(especialidadId)
+        && isAdmin()
+        && isValidFichaAcademia(incoming())
+        && incoming().especialidad_id == especialidadId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(especialidadId)
+        && isAdmin()
+        && isValidFichaAcademia(incoming())
+        && incoming().especialidad_id == existing().especialidad_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'nombre_especialidad', 'presidente_academia', 'integrantes_academia',
+          'fecha_entrega', 'resumen_ejecutivo', 'recursos_multimedia',
+          'banco_reactivos', 'reto_ludico', 'updatedAt'
+        ]);
+      allow delete: if isValidId(especialidadId) && isAdmin();
+    }
+  }
+}

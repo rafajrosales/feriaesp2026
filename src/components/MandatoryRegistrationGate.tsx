@@ -1,0 +1,1049 @@
+import React, { useState } from 'react';
+import { Estudiante, TutorLegal } from '../types';
+import { 
+  getEstudiantes, 
+  getEstudianteByCURP, 
+  getEstudianteByNC, 
+  validarCURP, 
+  registrarNuevoEstudiante,
+  setSesionActiva,
+  setEstudianteActivoNC,
+  SesionUsuario,
+  validarClaveAccesoDocente
+} from '../services/storage';
+import { 
+  ShieldAlert, 
+  UserCheck, 
+  UserPlus, 
+  Lock, 
+  School, 
+  CheckCircle2, 
+  AlertCircle, 
+  ArrowRight, 
+  ArrowLeft, 
+  Sparkles, 
+  Search, 
+  Building2, 
+  Mail, 
+  Phone, 
+  Fingerprint, 
+  Check, 
+  KeyRound,
+  Rocket,
+  RotateCcw,
+  Download
+} from 'lucide-react';
+import confetti from 'canvas-confetti';
+import { COMIC_ASSETS } from '../assets/comicAssets';
+import { BackupAndResetModal } from './BackupAndResetModal';
+import type { User } from 'firebase/auth';
+
+interface MandatoryRegistrationGateProps {
+  onAccessGranted: (estudiante?: Estudiante, sesion?: SesionUsuario) => void;
+  onOpenTutorial?: () => void;
+  firebaseUser?: User | null;
+  isGoogleAdmin?: boolean;
+  onGoogleSignIn?: () => void;
+  onGoogleSignOut?: () => void;
+  onEnterAsGoogleAdmin?: () => void;
+  authLoading?: boolean;
+  authError?: string | null;
+}
+
+export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps> = ({ 
+  onAccessGranted,
+  onOpenTutorial,
+  firebaseUser,
+  isGoogleAdmin = false,
+  onGoogleSignIn,
+  onGoogleSignOut,
+  onEnterAsGoogleAdmin,
+  authLoading,
+  authError
+}) => {
+  const [activeTab, setActiveTab] = useState<'registro' | 'login' | 'docente'>('registro');
+  const [paso, setPaso] = useState<1 | 2>(1);
+
+  // Registro: Paso 1
+  const [nombreCompleto, setNombreCompleto] = useState('');
+  const [curp, setCurp] = useState('');
+  const [numControl, setNumControl] = useState('');
+  const [grupo, setGrupo] = useState('1°A');
+  const [turno, setTurno] = useState<'MATUTINO' | 'VESPERTINO'>('MATUTINO');
+  const [telefonoAlumno, setTelefonoAlumno] = useState('');
+
+  // Registro: Paso 2 (Tutor Legal)
+  const [nombreTutor, setNombreTutor] = useState('');
+  const [parentesco, setParentesco] = useState<'Padre' | 'Madre' | 'Tutor Legal'>('Padre');
+  const [correoTutor, setCorreoTutor] = useState('');
+  const [telefonoTutor, setTelefonoTutor] = useState('');
+
+  // Feedback states
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successNotice, setSuccessNotice] = useState<string | null>(null);
+
+  // Login state
+  const [loginQuery, setLoginQuery] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Docente / Dirección Auth state
+  const [docentePass, setDocentePass] = useState('');
+  const [docenteError, setDocenteError] = useState<string | null>(null);
+
+  // Modal para Respaldar y Reiniciar Alumnos y Docentes
+  const [mostrarModalRespaldo, setMostrarModalRespaldo] = useState(false);
+  const [modoInicialRespaldo, setModoInicialRespaldo] = useState<'respaldar' | 'reiniciar' | 'restaurar'>('respaldar');
+
+  // All existing registered students for quick login / duplicate checks
+  const estudiantesRegistrados = getEstudiantes();
+  const estudiantesPropiosGoogle = firebaseUser?.uid
+    ? estudiantesRegistrados.filter(e => e.ownerUid === firebaseUser.uid)
+    : [];
+
+  // Real-time check if CURP is already registered
+  const cleanCurp = curp.trim().toUpperCase();
+  const estudianteExistenteConCurp = cleanCurp.length >= 10 ? getEstudianteByCURP(cleanCurp) : null;
+
+  // Handle auto-complete test student
+  const handleAutocompletarPrueba = () => {
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const nombres = ['Mariana Lizbeth Soto García', 'Alan Fernando Morales Ríos', 'Jimena Paulina Castro Delgado', 'José Ángel Mendoza Ortiz'];
+    const selectedNombre = nombres[Math.floor(Math.random() * nombres.length)];
+    const initials = selectedNombre.split(' ').map(n => n[0]).join('').slice(0, 4).toUpperCase();
+    
+    setNombreCompleto(selectedNombre);
+    setCurp(`${initials}090815HDFRLA${randomSuffix.toString().slice(0, 2)}`);
+    setNumControl(`2631607001${randomSuffix}`);
+    setGrupo('1°C');
+    setTurno('MATUTINO');
+    setTelefonoAlumno('55 3456 7890');
+    setNombreTutor('Lic. Juan Manuel Soto');
+    setParentesco('Padre');
+    setCorreoTutor(`tutor.${selectedNombre.split(' ')[0].toLowerCase()}@gmail.com`);
+    setTelefonoTutor('55 8765 4321');
+    setErrorMsg(null);
+  };
+
+  const handleNextStep = (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+
+    if (!nombreCompleto.trim() || nombreCompleto.trim().length < 5) {
+      setErrorMsg('Por favor escribe tu nombre completo con apellidos.');
+      return;
+    }
+
+    const curpValid = validarCURP(curp);
+    if (!curpValid.valido) {
+      setErrorMsg(curpValid.mensaje || 'La CURP ingresada no es válida.');
+      return;
+    }
+
+    // Check duplicate CURP
+    const existing = getEstudianteByCURP(curp.trim().toUpperCase());
+    if (existing) {
+      setErrorMsg(`Esta CURP ya está registrada a nombre de ${existing.nombre_completo}. Cada alumno tiene permitido un único registro. Si eres este alumno, ingresa en la pestaña "Ya estoy Registrado".`);
+      return;
+    }
+
+    if (!numControl.trim() || numControl.trim().length < 8) {
+      setErrorMsg('El número de control escolar debe contener al menos 8 dígitos.');
+      return;
+    }
+
+    const existingNC = getEstudianteByNC(numControl.trim());
+    if (existingNC) {
+      setErrorMsg(`El Número de Control ${numControl.trim()} ya se encuentra asignado a ${existingNC.nombre_completo}.`);
+      return;
+    }
+
+    setPaso(2);
+  };
+
+  const handleFinalizarRegistro = (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+
+    if (!nombreTutor.trim()) {
+      setErrorMsg('El nombre de tu padre, madre o tutor legal es obligatorio.');
+      return;
+    }
+
+    if (!correoTutor.trim() || !correoTutor.includes('@')) {
+      setErrorMsg('El correo electrónico del tutor es obligatorio para vincular la firma de autorización.');
+      return;
+    }
+
+    const tutorObj: TutorLegal = {
+      nombre_tutor: nombreTutor.trim(),
+      parentesco,
+      correo_tutor: correoTutor.trim().toLowerCase(),
+      telefono_tutor: telefonoTutor.trim() || 'No proporcionado',
+      verificado: false
+    };
+
+    const nuevoEstudiante: Estudiante = {
+      num_control: numControl.trim(),
+      nombre_completo: nombreCompleto.trim(),
+      grupo,
+      turno,
+      curp: curp.trim().toUpperCase(),
+      correo_institucional: `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${numControl.trim().slice(-4)}@cetis7.edu.mx`,
+      telefono_alumno: telefonoAlumno.trim(),
+      tutor: tutorObj
+    };
+
+    const result = registrarNuevoEstudiante(nuevoEstudiante);
+
+    if (!result.success) {
+      setErrorMsg(result.error || 'Ocurrió un error al registrar el alumno.');
+      return;
+    }
+
+    try {
+      confetti({
+        particleCount: 70,
+        spread: 80,
+        origin: { y: 0.5 }
+      });
+    } catch {
+      // safe ignore
+    }
+
+    setSuccessNotice(`¡Registro completado exitosamente! Bienvenido al CETis No. 7, ${nuevoEstudiante.nombre_completo}.`);
+    
+    setTimeout(() => {
+      onAccessGranted(result.estudiante);
+    }, 500);
+  };
+
+  const handleLoginExisting = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+
+    const q = loginQuery.trim().toUpperCase();
+    if (!q) {
+      setLoginError('Por favor ingresa tu CURP o Número de Control.');
+      return;
+    }
+
+    // Try finding by CURP first
+    let student = getEstudianteByCURP(q);
+    if (!student) {
+      student = getEstudianteByNC(q);
+    }
+
+    if (!student) {
+      setLoginError(`No se encontró ningún estudiante registrado con la CURP o Número de Control "${q}". Por favor regístrate como nuevo alumno.`);
+      return;
+    }
+
+    // Successful login
+    setEstudianteActivoNC(student.num_control);
+    setSesionActiva({
+      tipo: 'alumno',
+      num_control: student.num_control,
+      nombre: student.nombre_completo
+    });
+
+    onAccessGranted(student, { tipo: 'alumno', num_control: student.num_control, nombre: student.nombre_completo });
+  };
+
+  const handleSelectQuickStudent = (student: Estudiante) => {
+    setEstudianteActivoNC(student.num_control);
+    setSesionActiva({
+      tipo: 'alumno',
+      num_control: student.num_control,
+      nombre: student.nombre_completo
+    });
+    onAccessGranted(student, { tipo: 'alumno', num_control: student.num_control, nombre: student.nombre_completo });
+  };
+
+  const handleAccesoDocente = (e: React.FormEvent) => {
+    e.preventDefault();
+    setDocenteError(null);
+
+    const check = validarClaveAccesoDocente(docentePass);
+
+    if (!check.valido) {
+      setDocenteError(check.mensajeError || 'Clave de acceso incorrecta.');
+      return;
+    }
+
+    const nombreDocente = check.docente
+      ? `${check.docente.nombre_completo} (${check.docente.rol})`
+      : 'Dirección & Subdirección Académica CETis 7';
+
+    const sesionDir: SesionUsuario = {
+      tipo: 'docente',
+      nombre: nombreDocente
+    };
+    setSesionActiva(sesionDir);
+    onAccessGranted(undefined, sesionDir);
+  };
+
+  return (
+    <div className="min-h-[100dvh] w-full bg-stone-100 text-stone-900 flex flex-col font-sans">
+      {/* Top Institutional Strip */}
+      <header className="bg-[#721B32] text-white text-[10px] sm:text-[11px] font-medium py-2 px-3 sm:px-6 lg:px-8 border-b border-[#5a1527] shrink-0">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 truncate">
+            <span className="font-bold tracking-wider shrink-0">GOBIERNO DE MÉXICO</span>
+            <span className="opacity-50">|</span>
+            <span className="opacity-90 truncate">SEP · SEMS · DGETI</span>
+          </div>
+          <span className="font-mono-code text-[10px] text-amber-200 font-semibold shrink-0">
+            PLANTEL 007 · FERIA 2026
+          </span>
+        </div>
+      </header>
+
+      {/* Main Adaptive Workspace */}
+      <main className="flex-1 w-full max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-start">
+          {/* Left Column: Institutional Showcase & Careers Preview */}
+          <aside className="lg:col-span-5 space-y-4 min-w-0">
+            <div className="bg-white rounded-2xl border border-stone-200 shadow-xs overflow-hidden">
+              <div className="relative h-28 sm:h-40 lg:h-48 w-full overflow-hidden bg-stone-900 border-b-2 border-[#721B32]">
+                <img
+                  src={COMIC_ASSETS.hero}
+                  alt="Comunidad Estudiantil CETis No. 7"
+                  className="w-full h-full object-cover object-center"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#721B32] via-[#721B32]/70 to-black/35 flex flex-col justify-between p-3 sm:p-4 text-white">
+                  <div className="flex items-center justify-between text-[10px] font-mono-code gap-2">
+                    <span className="font-bold tracking-wider bg-black/50 px-2 py-0.5 rounded truncate">
+                      SEP · DGETI CDMX
+                    </span>
+                    <span className="bg-amber-400 text-stone-950 px-2 py-0.5 rounded font-black uppercase tracking-wider shrink-0">
+                      FERIA 2026
+                    </span>
+                  </div>
+                  <div>
+                    <h1 className="text-base sm:text-xl font-black text-white tracking-tight font-serif-institutional leading-tight">
+                      CETis No. 7 &quot;Miguel Lerdo de Tejada&quot;
+                    </h1>
+                    <p className="text-[11px] sm:text-xs text-amber-100 font-medium mt-0.5 line-clamp-2">
+                      Orientación vocacional, recorrido por 4 especialidades técnicas y Pase Digital QR.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {onOpenTutorial && (
+                <div className="bg-amber-50 border-b border-amber-200 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs text-amber-950">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span className="font-semibold truncate sm:whitespace-normal">
+                      ¿Primer ingreso? Consulta la guía de 3 pasos.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenTutorial}
+                    className="shrink-0 px-3 py-1.5 bg-white hover:bg-amber-100 text-stone-900 font-bold rounded-lg border border-amber-400 transition-colors flex items-center gap-1 text-xs cursor-pointer"
+                  >
+                    <span>Ver Tutorial</span>
+                    <ArrowRight className="w-3 h-3 text-amber-700" />
+                  </button>
+                </div>
+              )}
+
+              {/* 4 Illustrated Careers Preview (Desktop prominent, mobile compact) */}
+              <div className="hidden sm:block p-4 space-y-2.5 bg-stone-50/70">
+                <div className="text-[11px] font-bold text-stone-600 uppercase tracking-wider flex items-center justify-between">
+                  <span>4 Especialidades Técnicas</span>
+                  <span className="text-stone-400 font-normal normal-case">Test · Carreras · QR</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 gap-2.5">
+                  {(['programacion', 'comercio', 'rrhh', 'cosmetologia'] as const).map(specId => {
+                    const item = COMIC_ASSETS.especialidades[specId];
+                    return (
+                      <div key={specId} className="rounded-xl border border-stone-200 bg-white overflow-hidden">
+                        <div className="h-16 w-full overflow-hidden bg-stone-100">
+                          <img
+                            src={item.image}
+                            alt={item.badge}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="px-2 py-1.5 text-center">
+                          <span className="text-[11px] font-bold text-stone-900 block truncate">
+                            {specId === 'programacion'
+                              ? 'Programación'
+                              : specId === 'comercio'
+                              ? 'Comercio y Aduanas'
+                              : specId === 'rrhh'
+                              ? 'Recursos Humanos'
+                              : 'Cosmetología'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          {/* Right Column: Authentication & Registration Panel */}
+          <section className="lg:col-span-7 bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden min-w-0 flex flex-col">
+            {/* Google Authentication & Direct Entry Bar */}
+            {onGoogleSignIn && (
+              <div className="bg-blue-50/90 border-b border-blue-200 px-3.5 py-3 sm:px-5 space-y-2">
+                {firebaseUser?.emailVerified ? (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-emerald-900 flex items-center gap-1.5 truncate">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="truncate">Cuenta Google verificada: {firebaseUser.email}</span>
+                      </div>
+                      <p className="text-[11px] text-emerald-800 mt-0.5">
+                        {isGoogleAdmin
+                          ? 'Cuenta con permisos de Dirección Académica listos para ingresar.'
+                          : estudiantesPropiosGoogle.length > 0
+                          ? `Tienes ${estudiantesPropiosGoogle.length} matrícula(s) vinculada(s) lista(s) para entrar.`
+                          : 'Nube activa. Completa tu registro escolar abajo o elige tu matrícula en "2. Ya Registrado".'}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {isGoogleAdmin && onEnterAsGoogleAdmin && (
+                        <button
+                          type="button"
+                          onClick={onEnterAsGoogleAdmin}
+                          className="px-3.5 py-2 rounded-lg bg-[#721B32] hover:bg-[#5b1528] text-white font-bold text-xs shadow-xs cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                        >
+                          <span>Entrar a Dirección</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {!isGoogleAdmin && estudiantesPropiosGoogle.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectQuickStudent(estudiantesPropiosGoogle[0])}
+                          className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                        >
+                          <span>Entrar como {estudiantesPropiosGoogle[0].nombre_completo.split(' ')[0]}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {onGoogleSignOut && (
+                        <button
+                          type="button"
+                          onClick={onGoogleSignOut}
+                          className="px-2.5 py-2 rounded-lg bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 font-semibold text-xs cursor-pointer whitespace-nowrap"
+                        >
+                          Cambiar cuenta
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="text-[11px] sm:text-xs text-blue-950 leading-snug min-w-0">
+                      <strong>Sincronización y Acceso en la Nube:</strong> Conecta tu cuenta Google para ingresar directo como Dirección o respaldar tu Pase QR.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onGoogleSignIn}
+                      disabled={authLoading}
+                      className="px-3.5 py-2 rounded-lg bg-white hover:bg-blue-100 text-blue-900 border border-blue-300 font-bold text-xs shadow-2xs cursor-pointer shrink-0 transition-colors whitespace-nowrap"
+                    >
+                      {authLoading ? 'Conectando...' : 'Conectar Cuenta Google'}
+                    </button>
+                  </div>
+                )}
+
+                {authError && (
+                  <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-900 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <span className="font-medium">{authError}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Navigation Tabs */}
+            <div className="flex border-b border-stone-200 bg-stone-50 text-xs font-semibold shrink-0">
+              <button
+                type="button"
+                onClick={() => { setActiveTab('registro'); setErrorMsg(null); }}
+                className={`flex-1 py-3 px-2 sm:px-4 text-center transition-colors flex items-center justify-center gap-1.5 border-b-2 cursor-pointer whitespace-nowrap ${
+                  activeTab === 'registro'
+                    ? 'border-[#721B32] text-[#721B32] bg-white font-bold'
+                    : 'border-transparent text-stone-500 hover:text-stone-800'
+                }`}
+              >
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold">
+                  <span className="sm:hidden">1. Registro</span>
+                  <span className="hidden sm:inline">1. Nuevo Registro</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('login'); setLoginError(null); }}
+                className={`flex-1 py-3 px-2 sm:px-4 text-center transition-colors flex items-center justify-center gap-1.5 border-b-2 cursor-pointer whitespace-nowrap ${
+                  activeTab === 'login'
+                    ? 'border-[#721B32] text-[#721B32] bg-white font-bold'
+                    : 'border-transparent text-stone-500 hover:text-stone-800'
+                }`}
+              >
+                <KeyRound className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold">
+                  <span className="sm:hidden">2. Ingresar</span>
+                  <span className="hidden sm:inline">2. Ya Registrado</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('docente')}
+                className={`py-3 px-3 sm:px-5 text-center transition-colors flex items-center justify-center gap-1.5 border-b-2 cursor-pointer whitespace-nowrap ${
+                  activeTab === 'docente'
+                    ? 'border-[#721B32] text-[#721B32] bg-white font-bold'
+                    : 'border-transparent text-stone-500 hover:text-stone-800'
+                }`}
+                title="Acceso para personal académico"
+              >
+                <Building2 className="w-4 h-4 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold">
+                  <span className="sm:hidden">Docente</span>
+                  <span className="hidden sm:inline">Dirección</span>
+                </span>
+              </button>
+            </div>
+
+        {/* Tab 1 Content: Registro Obligatorio */}
+        {activeTab === 'registro' && (
+          <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1">
+            {/* Steps indicator */}
+            <div className="flex items-center justify-between text-xs font-medium text-stone-600 bg-stone-50 p-2.5 rounded-xl border border-stone-200">
+              <div className={`flex items-center gap-2 min-w-0 ${paso === 1 ? 'text-[#721B32] font-bold' : 'text-stone-700'}`}>
+                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs text-white shrink-0 font-bold ${paso === 1 ? 'bg-[#721B32]' : 'bg-emerald-600'}`}>
+                  {paso > 1 ? '✓' : '1'}
+                </span>
+                <span className="text-xs truncate">
+                  <span className="sm:hidden">1: Datos Alumno</span>
+                  <span className="hidden sm:inline">Paso 1: Alumno (CURP y Grupo)</span>
+                </span>
+              </div>
+              <span className="text-stone-300 px-1 shrink-0">➔</span>
+              <div className={`flex items-center gap-2 min-w-0 ${paso === 2 ? 'text-[#721B32] font-bold' : 'text-stone-400'}`}>
+                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs text-white shrink-0 font-bold ${paso === 2 ? 'bg-[#721B32]' : 'bg-stone-300'}`}>
+                  2
+                </span>
+                <span className="text-xs truncate">
+                  <span className="sm:hidden">2: Papá o Tutor</span>
+                  <span className="hidden sm:inline">Paso 2: Papá o Tutor (Correo Obligatorio)</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Notification alert */}
+            {errorMsg && (
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs sm:text-sm text-red-900 flex items-start gap-2.5 animate-in fade-in">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed font-medium">{errorMsg}</div>
+              </div>
+            )}
+
+            {successNotice && (
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs sm:text-sm text-emerald-900 flex items-start gap-2.5 animate-in fade-in">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed font-semibold">{successNotice}</div>
+              </div>
+            )}
+
+            {/* PASO 1: Formulario Estudiante */}
+            {paso === 1 && (
+              <form onSubmit={handleNextStep} className="space-y-4">
+                {/* Mobile-only compact 4-careers preview strip (desktop sees it in left column) */}
+                <div className="sm:hidden bg-stone-50 p-2 rounded-xl border border-stone-200">
+                  <div className="text-[10px] font-bold text-stone-600 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                    <span>4 Carreras Técnicas</span>
+                    <span className="text-stone-400 font-normal text-[9px]">Desliza ➔</span>
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                    {(['programacion', 'comercio', 'rrhh', 'cosmetologia'] as const).map(specId => {
+                      const item = COMIC_ASSETS.especialidades[specId];
+                      return (
+                        <div key={specId} className="w-24 shrink-0 rounded-lg border border-stone-200 bg-white overflow-hidden">
+                          <div className="h-10 w-full overflow-hidden bg-stone-100">
+                            <img 
+                              src={item.image} 
+                              alt={item.badge} 
+                              className="w-full h-full object-cover" 
+                            />
+                          </div>
+                          <div className="p-1 text-center">
+                            <span className="text-[10px] font-bold text-stone-900 block truncate">
+                              {specId === 'programacion' ? 'Programación' : specId === 'comercio' ? 'Comercio' : specId === 'rrhh' ? 'Recursos H.' : 'Cosmetología'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
+                  <span className="text-[11px] sm:text-xs text-stone-500 font-bold uppercase tracking-wider">
+                    Datos Escolares del Alumno
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAutocompletarPrueba}
+                    className="text-xs font-bold text-[#721B32] hover:text-[#501323] flex items-center gap-1 bg-[#721B32]/10 hover:bg-[#721B32]/15 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>⚡ Llenar ejemplo rápido</span>
+                  </button>
+                </div>
+
+                {/* Nombre Completo */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Nombre Completo del Estudiante *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoComplete="name"
+                    autoCapitalize="words"
+                    placeholder="Ej. Mariana Guadalupe Sánchez Cruz"
+                    value={nombreCompleto}
+                    onChange={e => setNombreCompleto(e.target.value)}
+                    className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white font-medium shadow-2xs"
+                  />
+                  <span className="text-[10px] text-stone-400 mt-1 block">
+                    Tal como aparece en tu credencial escolar o acta de nacimiento.
+                  </span>
+                </div>
+
+                {/* CURP con validación única */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-stone-800 flex items-center gap-1">
+                      <Fingerprint className="w-4 h-4 text-[#721B32] shrink-0" />
+                      <span>CURP Oficial (18 Caracteres) *</span>
+                    </label>
+                    <span className={`text-[11px] font-mono-code font-bold ${
+                      cleanCurp.length === 18 ? 'text-emerald-700' : 'text-stone-400'
+                    }`}>
+                      {cleanCurp.length}/18
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    maxLength={18}
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder="Ej. SACM090714HDFRLA01"
+                    value={curp}
+                    onChange={e => setCurp(e.target.value.toUpperCase())}
+                    className={`w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code font-bold tracking-wider border rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs ${
+                      estudianteExistenteConCurp 
+                        ? 'border-red-400 bg-red-50/50 text-red-900' 
+                        : cleanCurp.length === 18 
+                        ? 'border-emerald-500 bg-emerald-50/30 text-stone-900' 
+                        : 'border-stone-300 text-stone-900'
+                    }`}
+                  />
+                  
+                  {/* Warning if duplicate CURP */}
+                  {estudianteExistenteConCurp && (
+                    <div className="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                      <span>
+                        ⚠️ La CURP ya está asignada a <strong>{estudianteExistenteConCurp.nombre_completo}</strong>.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectQuickStudent(estudianteExistenteConCurp)}
+                        className="w-full sm:w-auto px-3 py-1.5 bg-red-800 text-white rounded-lg text-xs font-bold whitespace-nowrap hover:bg-red-900 cursor-pointer text-center"
+                      >
+                        Ingresar con esta cuenta
+                      </button>
+                    </div>
+                  )}
+
+                  <span className="text-[10px] text-stone-500 mt-1 block">
+                    Garantiza un solo registro por alumno conforme a normatividad DGETI.
+                  </span>
+                </div>
+
+                {/* Número de Control & Teléfono Alumno */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Número de Control Escolar *
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      required
+                      placeholder="Ej. 26316070010042"
+                      value={numControl}
+                      onChange={e => setNumControl(e.target.value.replace(/\D/g, ''))}
+                      className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code font-bold border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Teléfono Celular del Alumno
+                    </label>
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      placeholder="Ej. 55 1234 5678"
+                      value={telefonoAlumno}
+                      onChange={e => setTelefonoAlumno(e.target.value)}
+                      className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Turno - Touch-friendly Segmented Control */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1.5">
+                    Turno Asignado *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTurno('MATUTINO')}
+                      className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                        turno === 'MATUTINO'
+                          ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs'
+                          : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
+                      }`}
+                    >
+                      <span>☀️ Matutino</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTurno('VESPERTINO')}
+                      className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                        turno === 'VESPERTINO'
+                          ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs'
+                          : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
+                      }`}
+                    >
+                      <span>🌙 Vespertino</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Grupo - Touch-friendly Grid Selector */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1.5">
+                    Grupo de 1.° Semestre *
+                  </label>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    {['1°A', '1°B', '1°C', '1°D', '1°E', '1°F'].map(g => (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => setGrupo(g)}
+                        className={`py-2.5 text-xs font-mono-code font-bold rounded-xl border text-center transition-all cursor-pointer ${
+                          grupo === g
+                            ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs ring-2 ring-[#721B32]/30'
+                            : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
+                        }`}
+                      >
+                        {g}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-stone-200">
+                  <button
+                    type="submit"
+                    className="w-full py-3.5 sm:py-3 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] active:scale-[0.99] text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  >
+                    <span>Continuar al Paso 2: Datos del Tutor</span>
+                    <ArrowRight className="w-4 h-4 shrink-0" />
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* PASO 2: Formulario Tutor */}
+            {paso === 2 && (
+              <form onSubmit={handleFinalizarRegistro} className="space-y-4">
+                <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs sm:text-sm text-amber-900 leading-relaxed">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-950 mb-1">
+                    <Mail className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Vinculación Obligatoria del Tutor Legal</span>
+                  </div>
+                  El correo de tu papá, mamá o tutor legal es estrictamente obligatorio. Se registrará en la base de datos para validar su firma digital y autorizar la impresión de tu <strong>Pase Digital QR</strong>.
+                </div>
+
+                {/* Parentesco - Segmented Touch Buttons */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1.5">
+                    Parentesco con el Alumno *
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['Padre', 'Madre', 'Tutor Legal'] as const).map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setParentesco(p)}
+                        className={`py-2.5 px-2 rounded-xl border text-xs font-bold text-center transition-all cursor-pointer truncate ${
+                          parentesco === p
+                            ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs ring-2 ring-[#721B32]/30'
+                            : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
+                        }`}
+                      >
+                        {p === 'Padre' ? '👨 Padre' : p === 'Madre' ? '👩 Madre' : '⚖️ Tutor Legal'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    Nombre Completo del Padre, Madre o Tutor *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoComplete="name"
+                    autoCapitalize="words"
+                    placeholder="Ej. Roberto Sánchez Morales"
+                    value={nombreTutor}
+                    onChange={e => setNombreTutor(e.target.value)}
+                    className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white font-medium shadow-2xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Teléfono del Tutor *
+                    </label>
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      required
+                      placeholder="Ej. 55 9876 5432"
+                      value={telefonoTutor}
+                      onChange={e => setTelefonoTutor(e.target.value)}
+                      className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Correo Electrónico del Tutor *
+                    </label>
+                    <input
+                      type="email"
+                      inputMode="email"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="email"
+                      required
+                      placeholder="Ej. tutor.alumno@gmail.com"
+                      value={correoTutor}
+                      onChange={e => setCorreoTutor(e.target.value)}
+                      className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-stone-200 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setPaso(1)}
+                    className="w-full sm:w-auto px-4 py-3 sm:py-2.5 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    <span>Regresar al Paso 1</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="w-full sm:w-auto px-6 py-3.5 sm:py-3 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 active:scale-[0.99] text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  >
+                    <Check className="w-5 h-5" />
+                    <span>Completar Registro y Entrar</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2 Content: Ya estoy Registrado */}
+        {activeTab === 'login' && (
+          <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1">
+            <div className="text-center max-w-md mx-auto">
+              <h3 className="text-base font-bold text-stone-900">
+                Ingreso de Alumnos Previamente Registrados
+              </h3>
+              <p className="text-xs text-stone-600 mt-1">
+                Ingresa con tu <strong>CURP</strong> de 18 caracteres o tu <strong>Número de Control</strong> escolar para continuar tu orientación vocacional.
+              </p>
+            </div>
+
+            {loginError && (
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed">{loginError}</div>
+              </div>
+            )}
+
+            <form onSubmit={handleLoginExisting} className="max-w-md mx-auto space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-800 mb-1">
+                  CURP o Número de Control:
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder="Ej. SACM090714HDFRLA01 o 26316070010042"
+                    value={loginQuery}
+                    onChange={e => setLoginQuery(e.target.value.toUpperCase())}
+                    className="w-full pl-10 pr-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code font-bold tracking-wider border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                  />
+                  <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-3.5" />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 sm:py-3 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] active:scale-[0.99] text-white rounded-xl text-sm font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>Acceder a mi Cuenta de Alumno</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+
+            {/* Quick switcher of existing cohort for testing */}
+            <div className="border-t border-stone-200 pt-3 sm:pt-4 mt-3 sm:mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] sm:text-[11px] font-bold text-stone-500 uppercase tracking-wider">
+                  Alumnos Registrados en el Padrón ({estudiantesRegistrados.length})
+                </span>
+                <span className="text-[10px] text-stone-400">Toca para entrar</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-1">
+                {estudiantesRegistrados.map(est => (
+                  <button
+                    key={est.num_control}
+                    type="button"
+                    onClick={() => handleSelectQuickStudent(est)}
+                    className="p-3 text-left rounded-xl border border-stone-200 hover:border-[#721B32] hover:bg-stone-50 transition-all flex items-center justify-between text-xs cursor-pointer gap-2 active:scale-[0.99]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-stone-900 truncate">{est.nombre_completo}</div>
+                      <div className="text-[10px] text-stone-500 font-mono-code truncate">
+                        {est.curp} · {est.grupo}
+                      </div>
+                    </div>
+                    <span className={`text-[9px] px-2 py-0.5 rounded font-bold shrink-0 ${
+                      est.tutor?.verificado ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {est.tutor?.verificado ? '✓ Tutor OK' : '⚠️ Sin Firma'}
+                    </span>
+                  </button>
+                ))}
+                {estudiantesRegistrados.length === 0 && (
+                  <div className="col-span-1 sm:col-span-2 text-center p-4 bg-stone-50 rounded-xl border border-stone-200 text-xs text-stone-500 space-y-1">
+                    <p className="font-semibold text-stone-700">No hay alumnos registrados actualmente</p>
+                    <p className="text-[11px]">Por favor regístrate como nuevo estudiante en la pestaña <strong>"1. Registro"</strong>.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 3 Content: Acceso Personal Docente / Dirección */}
+        {activeTab === 'docente' && (
+          <div className="w-full p-4 sm:p-6 space-y-4 max-w-md mx-auto flex-1">
+            <div className="text-center space-y-1">
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#721B32] text-white flex items-center justify-center mx-auto shadow-xs">
+                <Building2 className="w-5 h-5 sm:w-6 sm:h-6 text-amber-300" />
+              </div>
+              <h3 className="text-sm sm:text-base font-bold text-stone-900 pt-1">
+                Autenticación de Dirección Académica
+              </h3>
+              <p className="text-xs text-stone-600 leading-relaxed">
+                Módulo reservado para directivos, docentes tutores y personal de control escolar del CETis No. 7. Ingresa la clave o PIN institucional.
+              </p>
+            </div>
+
+            {docenteError && (
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1 font-medium">{docenteError}</div>
+              </div>
+            )}
+
+            <form onSubmit={handleAccesoDocente} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-800 mb-1">
+                  Clave Institucional / PIN Directivo:
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    required
+                    placeholder="Ingresa clave o PIN directivo"
+                    value={docentePass}
+                    onChange={e => setDocentePass(e.target.value)}
+                    className="w-full pl-10 pr-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code font-bold tracking-wider border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                  />
+                  <KeyRound className="w-4 h-4 text-stone-400 absolute left-3.5 top-3.5" />
+                </div>
+              </div>
+
+
+
+              <button
+                type="submit"
+                className="w-full py-3 sm:py-2.5 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <School className="w-4 h-4 text-amber-300" />
+                <span>Autenticar e Ingresar a Dirección</span>
+              </button>
+
+              {/* Botón rápido para Respaldar o Reiniciar Alumnos y Docentes */}
+              <div className="pt-2 border-t border-stone-200 text-center flex items-center justify-center gap-3">
+
+              </div>
+            </form>
+          </div>
+        )}
+
+            {/* Footer info note with quick backup/reset trigger */}
+            <div className="bg-stone-100 px-4 sm:px-6 py-3 border-t border-stone-200 flex flex-wrap items-center justify-between gap-2 text-[10px] sm:text-[11px] text-stone-500 font-mono-code shrink-0">
+              <span>Plantel Cuautepec, GAM, CDMX</span>
+              <span>DGETI · Ciclo 2026</span>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      {/* Modal Institucional para Respaldar, Reiniciar y Restaurar */}
+      <BackupAndResetModal
+        isOpen={mostrarModalRespaldo}
+        onClose={() => setMostrarModalRespaldo(false)}
+        onDataChanged={() => {
+          window.location.reload();
+        }}
+        initialMode={modoInicialRespaldo}
+      />
+    </div>
+  );
+};

@@ -1,0 +1,326 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Usuario administrador o directivo autorizado en la base de datos de Firestore.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt", "updatedAt"]
+    },
+    "TutorLegal": {
+      "title": "TutorLegal",
+      "description": "Datos del padre, madre o tutor legal del estudiante.",
+      "type": "object",
+      "properties": {
+        "nombre_tutor": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "parentesco": { "type": "string", "enum": ["Padre", "Madre", "Tutor Legal"] },
+        "correo_tutor": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "telefono_tutor": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "verificado": { "type": "boolean" },
+        "fecha_verificacion": { "type": "string", "maxLength": 64 },
+        "firma_digital": { "type": "string", "maxLength": 100000 },
+        "token_verificacion": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["nombre_tutor", "parentesco", "correo_tutor", "telefono_tutor", "verificado"]
+    },
+    "Estudiante": {
+      "title": "Estudiante",
+      "description": "Registro de aspirante o alumno de primer semestre del CETis No. 7.",
+      "type": "object",
+      "properties": {
+        "num_control": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nombre_completo": { "type": "string", "minLength": 2, "maxLength": 150 },
+        "grupo": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "turno": { "type": "string", "enum": ["MATUTINO", "VESPERTINO"] },
+        "correo_institucional": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "curp": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "avatar_url": { "type": "string", "maxLength": 500 },
+        "telefono_alumno": { "type": "string", "maxLength": 30 },
+        "tutor": { "$ref": "#/entities/TutorLegal" },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "num_control",
+        "nombre_completo",
+        "grupo",
+        "turno",
+        "correo_institucional",
+        "curp",
+        "tutor",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EvaluacionVocacional": {
+      "title": "EvaluacionVocacional",
+      "description": "Resultado completo del Test Oficial de Orientación Vocacional de 40 reactivos en 4 partes.",
+      "type": "object",
+      "properties": {
+        "num_control": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "version_test": { "type": "string", "enum": ["40_REACTIVOS_2026", "8_REACTIVOS_LEGACY"] },
+        "total_reactivos": { "type": "number" },
+        "score_aptitud_programacion": { "type": "number" },
+        "score_gusto_programacion": { "type": "number" },
+        "score_aptitud_comercio": { "type": "number" },
+        "score_gusto_comercio": { "type": "number" },
+        "score_aptitud_rrhh": { "type": "number" },
+        "score_gusto_rrhh": { "type": "number" },
+        "score_aptitud_cosmetologia": { "type": "number" },
+        "score_gusto_cosmetologia": { "type": "number" },
+        "puntajes_especialidad": { "type": "object" },
+        "porcentajes_especialidad": { "type": "object" },
+        "desglose_partes": { "type": "object" },
+        "respuestas_detalle": { "type": "object" },
+        "especialidades_empatadas": { "type": "array" },
+        "carrera_sugerida": { "type": "string", "enum": ["programacion", "comercio", "rrhh", "cosmetologia"] },
+        "segunda_opcion": { "type": "string", "enum": ["programacion", "comercio", "rrhh", "cosmetologia"] },
+        "analisis_pedagogico": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "fecha_evaluacion": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "sincronizado_firestore": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "num_control",
+        "ownerUid",
+        "score_aptitud_programacion",
+        "score_gusto_programacion",
+        "score_aptitud_comercio",
+        "score_gusto_comercio",
+        "score_aptitud_rrhh",
+        "score_gusto_rrhh",
+        "score_aptitud_cosmetologia",
+        "score_gusto_cosmetologia",
+        "carrera_sugerida",
+        "analisis_pedagogico",
+        "fecha_evaluacion",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProgresoVirtual": {
+      "title": "ProgresoVirtual",
+      "description": "Avance integral del alumno (0% a 100%) en el test vocacional (20%) y las 4 especialidades técnicas (80%).",
+      "type": "object",
+      "properties": {
+        "num_control": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "test_vocacional_completado": { "type": "boolean" },
+        "progreso_especialidades": { "type": "object" },
+        "porcentaje_virtual": { "type": "number" },
+        "promedio_cuestionarios": { "type": "number" },
+        "clave_unica_token": { "type": "string", "maxLength": 128 },
+        "estatus_fase_virtual": { "type": "string", "enum": ["PENDIENTE", "EN_PROCESO", "COMPLETADO"] },
+        "fecha_termino": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "num_control",
+        "ownerUid",
+        "test_vocacional_completado",
+        "progreso_especialidades",
+        "porcentaje_virtual",
+        "promedio_cuestionarios",
+        "clave_unica_token",
+        "estatus_fase_virtual",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DocenteAutorizado": {
+      "title": "DocenteAutorizado",
+      "description": "Padrón de docentes y directivos autorizados del CETis No. 7.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nombre_completo": { "type": "string", "minLength": 2, "maxLength": 150 },
+        "rfc": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "correo_institucional": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "academia": { "type": "string", "enum": ["programacion", "comercio", "rrhh", "cosmetologia", "general"] },
+        "rol": {
+          "type": "string",
+          "enum": ["Profesor Titular", "Jefe de Academia", "Tutor Escolar", "Subdirector"]
+        },
+        "clave_acceso": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "estatus_autorizacion": { "type": "string", "enum": ["AUTORIZADO", "PENDIENTE", "REVOCADO"] },
+        "fecha_alta": { "type": "string", "maxLength": 64 },
+        "registrado_por": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "nombre_completo",
+        "rfc",
+        "correo_institucional",
+        "academia",
+        "rol",
+        "clave_acceso",
+        "estatus_autorizacion",
+        "fecha_alta",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CuestionarioEspecialidad": {
+      "title": "CuestionarioEspecialidad",
+      "description": "Cuestionario editable por academia para evaluación de especialidades.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "especialidad_id": { "type": "string", "enum": ["programacion", "comercio", "rrhh", "cosmetologia"] },
+        "titulo": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "descripcion": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "instrucciones": { "type": "string", "maxLength": 1000 },
+        "porcentaje_aprobatorio": { "type": "number" },
+        "tiempo_limite_min": { "type": "number" },
+        "activo": { "type": "boolean" },
+        "fecha_actualizacion": { "type": "string", "maxLength": 64 },
+        "autor_docente": { "type": "string", "maxLength": 150 },
+        "preguntas": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "especialidad_id",
+        "titulo",
+        "descripcion",
+        "porcentaje_aprobatorio",
+        "activo",
+        "fecha_actualizacion",
+        "preguntas",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FichaAcademiaReq": {
+      "title": "FichaAcademiaReq",
+      "description": "Ficha técnica, multimedia y banco de reactivos editable de cada academia.",
+      "type": "object",
+      "properties": {
+        "especialidad_id": { "type": "string", "enum": ["programacion", "comercio", "rrhh", "cosmetologia"] },
+        "nombre_especialidad": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "presidente_academia": { "type": "string", "minLength": 2, "maxLength": 150 },
+        "integrantes_academia": { "type": "array" },
+        "fecha_entrega": { "type": "string", "maxLength": 64 },
+        "resumen_ejecutivo": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "recursos_multimedia": { "type": "object" },
+        "banco_reactivos": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "especialidad_id",
+        "nombre_especialidad",
+        "presidente_academia",
+        "integrantes_academia",
+        "fecha_entrega",
+        "resumen_ejecutivo",
+        "recursos_multimedia",
+        "banco_reactivos",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Registro de administradores institucionales habilitados en la plataforma."
+    },
+    "/estudiantes/{numControl}": {
+      "schema": { "$ref": "#/entities/Estudiante" },
+      "description": "Padrón de alumnos con datos escolares, CURP y autorización del tutor legal."
+    },
+    "/evaluaciones/{numControl}": {
+      "schema": { "$ref": "#/entities/EvaluacionVocacional" },
+      "description": "Resultados del Test Oficial de Orientación Vocacional de 40 reactivos y desglose por 4 partes."
+    },
+    "/progresos/{numControl}": {
+      "schema": { "$ref": "#/entities/ProgresoVirtual" },
+      "description": "Seguimiento del avance de orientación vocacional (100%) y generación del token QR."
+    },
+    "/docentes/{docenteId}": {
+      "schema": { "$ref": "#/entities/DocenteAutorizado" },
+      "description": "Padrón confidencial de docentes autorizados y claves institucionales."
+    },
+    "/cuestionarios_especialidades/{cuestionarioId}": {
+      "schema": { "$ref": "#/entities/CuestionarioEspecialidad" },
+      "description": "Cuestionarios editables por especialidad."
+    },
+    "/fichas_academia/{especialidadId}": {
+      "schema": { "$ref": "#/entities/FichaAcademiaReq" },
+      "description": "Contenido multimedia y banco de reactivos de cada especialidad."
+    }
+  }
+}
