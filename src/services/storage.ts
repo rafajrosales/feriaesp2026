@@ -338,6 +338,24 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
       },
       onFichas: dict => {
         const merged = { ...FICHAS_ACADEMIA_DEFAULT, ...dict };
+        const progRemote = dict.programacion;
+        const progDefault = FICHAS_ACADEMIA_DEFAULT.programacion;
+        if (progRemote && progDefault) {
+          const remoteGal = progRemote.recursos_multimedia?.galeria_alumnos || [];
+          const hasDrive = remoteGal.some(item => String(item.id).startsWith('prog-drive-'));
+          const defaultDrive = (progDefault.recursos_multimedia?.galeria_alumnos || []).filter(item =>
+            String(item.id).startsWith('prog-drive-')
+          );
+          if (!hasDrive && defaultDrive.length > 0) {
+            merged.programacion = {
+              ...progRemote,
+              recursos_multimedia: {
+                ...progRemote.recursos_multimedia,
+                galeria_alumnos: [...remoteGal, ...defaultDrive]
+              }
+            };
+          }
+        }
         updateDbState({
           connected: true,
           fichas: merged,
@@ -970,16 +988,17 @@ export async function registrarAccesoGoogleEnNube(
   metodo: AccesoGoogleEvento['metodo'] = 'login_interactivo'
 ): Promise<void> {
   if (!user || !user.emailVerified) return;
-  if (typeof window !== 'undefined' && metodo === 'sesion_activa') {
+  if (typeof window !== 'undefined') {
     const alreadyLogged = window.sessionStorage.getItem(SESSION_KEYS.AUTH_LOGGED_UID);
-    if (alreadyLogged === user.uid) return;
+    if (metodo === 'sesion_activa' && alreadyLogged === user.uid) return;
+    window.sessionStorage.setItem(SESSION_KEYS.AUTH_LOGGED_UID, user.uid);
   }
   try {
     await cloudRegistrarAccesoGoogle(user, isAdminFlag, metodo);
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem(SESSION_KEYS.AUTH_LOGGED_UID, user.uid);
-    }
   } catch (error) {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(SESSION_KEYS.AUTH_LOGGED_UID);
+    }
     console.warn('No se pudo registrar el acceso de Google en Firebase:', error);
   }
 }

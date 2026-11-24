@@ -286,14 +286,17 @@ function sanitizeForFirestore<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map(item => sanitizeForFirestore(item)) as unknown as T;
   }
-  if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v !== undefined) {
-        out[k] = sanitizeForFirestore(v);
+  if (value !== null && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto === Object.prototype || proto === null) {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        if (v !== undefined) {
+          out[k] = sanitizeForFirestore(v);
+        }
       }
+      return out as T;
     }
-    return out as T;
   }
   return value;
 }
@@ -621,6 +624,28 @@ export async function cloudEnsureInstitutionalDefaultsIfEmpty(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+    } else if (ficha.especialidad_id === 'programacion') {
+      const existingData = snap.data() as Partial<FichaAcademiaReq> & { createdAt?: unknown };
+      const existingGal = Array.isArray(existingData.recursos_multimedia?.galeria_alumnos)
+        ? existingData.recursos_multimedia!.galeria_alumnos!
+        : [];
+      const defaultDriveItems = (ficha.recursos_multimedia?.galeria_alumnos || []).filter(item =>
+        String(item.id).startsWith('prog-drive-')
+      );
+      const hasDriveItems = existingGal.some(item => String(item.id).startsWith('prog-drive-'));
+      if (!hasDriveItems && defaultDriveItems.length > 0 && existingData.recursos_multimedia) {
+        const sanitizedExisting = sanitizeForFirestore(existingData as Record<string, unknown>);
+        const mergedGal = sanitizeForFirestore([...existingGal, ...defaultDriveItems]);
+        await setDoc(ref, {
+          ...sanitizedExisting,
+          recursos_multimedia: {
+            ...(sanitizedExisting.recursos_multimedia as Record<string, unknown>),
+            galeria_alumnos: mergedGal
+          },
+          createdAt: existingData.createdAt ?? serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
     }
   }
 
@@ -698,15 +723,17 @@ export async function cloudSeedEstudiantesWithRelations(
       const cleanNC = est.num_control.trim();
       const cleanCurp = est.curp.trim().toUpperCase();
       const ownerUid = est.ownerUid || user.uid;
-      const estPayload = sanitizeForFirestore({
-        ...est,
-        num_control: cleanNC,
-        curp: cleanCurp,
-        turno: 'MATUTINO',
-        ownerUid,
+      const estPayload = {
+        ...sanitizeForFirestore({
+          ...est,
+          num_control: cleanNC,
+          curp: cleanCurp,
+          turno: 'MATUTINO',
+          ownerUid
+        } as unknown as Record<string, unknown>),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      };
       studentOps.push(b => b.set(doc(db, COLLECTIONS.ESTUDIANTES, cleanNC), estPayload));
       studentOps.push(b =>
         b.set(doc(db, COLLECTIONS.CURP_REGISTRY, cleanCurp), {
@@ -775,72 +802,103 @@ export async function cloudSeedDocentesList(docentes: DocenteAutorizado[]): Prom
 // Google Authentication Registry (/accesos_google/{uid})
 // ---------------------------------------------------------------------
 
+const inFlightAccesoByUid = new Map<string, Promise<void>>();
+
 export async function cloudRegistrarAccesoGoogle(
   user: User,
-  isAdminFlag: boolean,
+  _isAdminFlag: boolean,
   metodo: AccesoGoogleEvento['metodo'] = 'login_interactivo'
 ): Promise<void> {
   if (!user || !user.emailVerified || !user.email) return;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 
-  const docRef = doc(db, COLLECTIONS.ACCESOS_GOOGLE, user.uid);
-  const path = `${COLLECTIONS.ACCESOS_GOOGLE}/${user.uid}`;
-  const nowIso = new Date().toISOString();
-  const origen = typeof window !== 'undefined' ? window.location.origin : 'desconocido';
-  const nombreGoogle = (user.displayName || user.email.split('@')[0] || 'Usuario Google').slice(0, 150);
-  const eventoNuevo: AccesoGoogleEvento = {
-    fecha_iso: nowIso,
-    origen: origen.slice(0, 200),
-    metodo
-  };
+  const previous = inFlightAccesoByUid.get(user.uid) || Promise.resolve();
+  const nextWrite = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const docRef = doc(db, COLLECTIONS.ACCESOS_GOOGLE, user.uid);
+      const path = `${COLLECTIONS.ACCESOS_GOOGLE}/${user.uid}`;
+      const nowIso = new Date().toISOString();
+      const rawOrigin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://cetis7.edu.mx';
+      const origen = rawOrigin.trim().slice(0, 250) || 'https://cetis7.edu.mx';
+      const rawNombre = (user.displayName || user.email?.split('@')[0] || 'Usuario Google').trim();
+      const nombreGoogle = (rawNombre || 'Usuario Google').slice(0, 150);
+      const cleanEmail = (user.email || '').trim().toLowerCase();
+      const verifiedIsAdmin = Boolean(user.emailVerified && cleanEmail === BOOTSTRAPPED_ADMIN_EMAIL);
+      const cleanPhoto = user.photoURL && user.photoURL.trim() ? user.photoURL.trim().slice(0, 500) : undefined;
 
-  let opType: OperationType = OperationType.WRITE;
+      const eventoNuevo: AccesoGoogleEvento = {
+        fecha_iso: nowIso,
+        origen: origen.slice(0, 200),
+        metodo
+      };
+
+      let opType: OperationType = OperationType.WRITE;
+      try {
+        const snap = await getDocFromServer(docRef);
+        if (!snap.exists()) {
+          opType = OperationType.CREATE;
+          const baseCreate = sanitizeForFirestore({
+            uid: user.uid,
+            email: cleanEmail,
+            nombre_google: nombreGoogle,
+            ...(cleanPhoto ? { foto_url: cleanPhoto } : {}),
+            es_admin: verifiedIsAdmin,
+            primer_acceso: nowIso,
+            ultimo_acceso: nowIso,
+            total_accesos: 1,
+            ultimo_origen: origen,
+            historial_reciente: [eventoNuevo]
+          });
+          await setDoc(docRef, {
+            ...baseCreate,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        } else {
+          opType = OperationType.UPDATE;
+          const existingData = snap.data() as Partial<AccesoGoogle> & { createdAt?: unknown };
+          const prevHist = Array.isArray(existingData.historial_reciente)
+            ? existingData.historial_reciente
+            : [];
+          const nextHist = [eventoNuevo, ...prevHist].slice(0, 10);
+          const prevTotal = typeof existingData.total_accesos === 'number' ? existingData.total_accesos : 1;
+          const existingPhoto =
+            typeof existingData.foto_url === 'string' && existingData.foto_url.trim()
+              ? existingData.foto_url.trim().slice(0, 500)
+              : undefined;
+          const resolvedPhoto = cleanPhoto || existingPhoto;
+
+          const baseUpdate = sanitizeForFirestore({
+            uid: existingData.uid || user.uid,
+            email: existingData.email || cleanEmail,
+            nombre_google: nombreGoogle,
+            ...(resolvedPhoto ? { foto_url: resolvedPhoto } : {}),
+            es_admin: verifiedIsAdmin,
+            primer_acceso: existingData.primer_acceso || nowIso,
+            ultimo_acceso: nowIso,
+            total_accesos: prevTotal + 1,
+            ultimo_origen: origen,
+            historial_reciente: nextHist
+          });
+          await setDoc(docRef, {
+            ...baseUpdate,
+            createdAt: existingData.createdAt ?? serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        }
+      } catch (error) {
+        handleFirestoreError(error, opType, path);
+      }
+    });
+
+  inFlightAccesoByUid.set(user.uid, nextWrite);
   try {
-    const snap = await getDocFromServer(docRef);
-    if (!snap.exists()) {
-      opType = OperationType.CREATE;
-      const createPayload = sanitizeForFirestore({
-        uid: user.uid,
-        email: user.email.toLowerCase(),
-        nombre_google: nombreGoogle,
-        ...(user.photoURL ? { foto_url: user.photoURL.slice(0, 500) } : {}),
-        es_admin: isAdminFlag,
-        primer_acceso: nowIso,
-        ultimo_acceso: nowIso,
-        total_accesos: 1,
-        ultimo_origen: origen.slice(0, 250),
-        historial_reciente: [eventoNuevo],
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-      await setDoc(docRef, createPayload);
-    } else {
-      opType = OperationType.UPDATE;
-      const existingData = snap.data() as Partial<AccesoGoogle> & { createdAt?: unknown };
-      const prevHist = Array.isArray(existingData.historial_reciente)
-        ? existingData.historial_reciente
-        : [];
-      const nextHist = [eventoNuevo, ...prevHist].slice(0, 10);
-      const prevTotal = typeof existingData.total_accesos === 'number' ? existingData.total_accesos : 1;
-
-      const updatePayload = sanitizeForFirestore({
-        uid: existingData.uid || user.uid,
-        email: existingData.email || user.email.toLowerCase(),
-        nombre_google: nombreGoogle,
-        ...(user.photoURL ? { foto_url: user.photoURL.slice(0, 500) } : existingData.foto_url ? { foto_url: existingData.foto_url } : {}),
-        es_admin: isAdminFlag,
-        primer_acceso: existingData.primer_acceso || nowIso,
-        ultimo_acceso: nowIso,
-        total_accesos: prevTotal + 1,
-        ultimo_origen: origen.slice(0, 250),
-        historial_reciente: nextHist,
-        createdAt: existingData.createdAt ?? serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-      await setDoc(docRef, updatePayload);
+    await nextWrite;
+  } finally {
+    if (inFlightAccesoByUid.get(user.uid) === nextWrite) {
+      inFlightAccesoByUid.delete(user.uid);
     }
-  } catch (error) {
-    handleFirestoreError(error, opType, path);
   }
 }
 

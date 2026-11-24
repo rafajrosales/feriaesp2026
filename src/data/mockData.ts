@@ -222,6 +222,60 @@ export const ESPECIALIDADES: SpecialtyInfo[] = [
         tipo: 'foto',
         url_media: 'https://images.unsplash.com/photo-1531403009284-440f080d1e12?auto=format&fit=crop&w=1200&q=80',
         descripcion: 'Sesión práctica de desarrollo en el Laboratorio de Cómputo 3.'
+      },
+      {
+        id: 'prog-drive-1',
+        titulo: 'Prácticas en Laboratorio de Programación 1',
+        alumnos: 'Academia de Programación CETis 7',
+        semestre: 'Evidencia Estudiantil',
+        tipo: 'foto',
+        url_media: 'https://drive.google.com/file/d/1kE_IbOtVPREi6NXTyE7NJD8NrzT8hMPh/view',
+        descripcion: 'Fotografía de prácticas de laboratorio y desarrollo de proyectos de alumnos de Programación.'
+      },
+      {
+        id: 'prog-drive-2',
+        titulo: 'Prácticas en Laboratorio de Programación 2',
+        alumnos: 'Academia de Programación CETis 7',
+        semestre: 'Evidencia Estudiantil',
+        tipo: 'foto',
+        url_media: 'https://drive.google.com/file/d/1XTglEpzKabT8ETx3wCLOInOgmwBvDX93/view',
+        descripcion: 'Fotografía de prácticas de laboratorio y desarrollo de proyectos de alumnos de Programación.'
+      },
+      {
+        id: 'prog-drive-3',
+        titulo: 'Actividad de Desarrollo de Software 3',
+        alumnos: 'Academia de Programación CETis 7',
+        semestre: 'Evidencia Estudiantil',
+        tipo: 'foto',
+        url_media: 'https://drive.google.com/file/d/1Lvp53a7JsJ4tNCxjSqmRxH3FgWYt2oB8/view',
+        descripcion: 'Evidencia fotográfica del trabajo en equipo y codificación en la especialidad de Programación.'
+      },
+      {
+        id: 'prog-drive-4',
+        titulo: 'Actividad de Desarrollo de Software 4',
+        alumnos: 'Academia de Programación CETis 7',
+        semestre: 'Evidencia Estudiantil',
+        tipo: 'foto',
+        url_media: 'https://drive.google.com/file/d/1bn-oYfl8_LhA-9fPABgCB49RTZ9fNR3j/view',
+        descripcion: 'Evidencia fotográfica del trabajo en equipo y codificación en la especialidad de Programación.'
+      },
+      {
+        id: 'prog-drive-5',
+        titulo: 'Actividad de Desarrollo de Software 5',
+        alumnos: 'Academia de Programación CETis 7',
+        semestre: 'Evidencia Estudiantil',
+        tipo: 'foto',
+        url_media: 'https://drive.google.com/file/d/1MNQ2FkRc1zPsY4Z0-5NVNBSq5hNm0fOY/view',
+        descripcion: 'Evidencia fotográfica del trabajo en equipo y codificación en la especialidad de Programación.'
+      },
+      {
+        id: 'prog-drive-6',
+        titulo: 'Exposición de Proyectos de Programación 6',
+        alumnos: 'Academia de Programación CETis 7',
+        semestre: 'Evidencia Estudiantil',
+        tipo: 'foto',
+        url_media: 'https://drive.google.com/file/d/1x807lzHR4UJUFCjwaPWvjObD7kWXU05R/view',
+        descripcion: 'Muestra estudiantil de sistemas y aplicaciones desarrolladas en la carrera de Programación.'
       }
     ],
     preguntas_quiz: [
@@ -1508,6 +1562,60 @@ export const FICHAS_ACADEMIA_DEFAULT: Record<string, FichaAcademiaReq> = {
           tipo: 'foto',
           url_media: 'https://images.unsplash.com/photo-1531403009284-440f080d1e12?auto=format&fit=crop&w=1200&q=80',
           descripcion: 'Sesión práctica de desarrollo en el Laboratorio de Cómputo 3.'
+        },
+        {
+          id: 'prog-drive-1',
+          titulo: 'Prácticas en Laboratorio de Programación 1',
+          alumnos: 'Academia de Programación CETis 7',
+          semestre: 'Evidencia Estudiantil',
+          tipo: 'foto',
+          url_media: 'https://drive.google.com/file/d/1kE_IbOtVPREi6NXTyE7NJD8NrzT8hMPh/view',
+          descripcion: 'Fotografía de prácticas de laboratorio y desarrollo de proyectos de alumnos de Programación.'
+        },
+        {
+          id: 'prog-drive-2',
+          titulo: 'Prácticas en Laboratorio de Programación 2',
+          alumnos: 'Academia de Programación CETis 7',
+          semestre: 'Evidencia Estudiantil',
+          tipo: 'foto',
+          url_media: 'https://drive.google.com/file/d/1XTglEpzKabT8ETx3wCLOInOgmwBvDX93/view',
+          descripcion: 'Fotografía de prácticas de laboratorio y desarrollo de proyectos de alumnos de Programación.'
+        },
+        {
+          id: 'prog-drive-3',
+          titulo: 'Actividad de Desarrollo de Software 3',
+          alumnos: 'Academia de Programación CETis 7',
+          semestre: 'Evidencia Estudiantil',
+          tipo: 'foto',
+          url_media: 'https://drive.google.com/file/d/1Lvp53a7JsJ4tNCxjSqmRxH3FgWYt2oB8/view',
+          descripcion: 'Evidencia fotográfica del trabajo en equipo y codificación en la especialidad de Programación.'
+        },
+        {
+          id: 'prog-drive-4',
+          titulo: 'Actividad de Desarrollo de Software 4',
+          alumnos: 'Academia de Programación CETis 7',
+          semestre: 'Evidencia Estudiantil',
+          tipo: 'foto',
+          url_media: 'https://drive.google.com/file/d/1bn-oYfl8_LhA-9fPABgCB49RTZ9fNR3j/view',
+          descripcion: 'Evidencia fotográfica del trabajo en equipo y codificación en la especialidad de Programación.'
+        },
+        {
+          id: 'prog-drive-5',
+          titulo: 'Actividad de Desarrollo de Software 5',
+          alumnos: 'Academia de Programación CETis 7',
+          semestre: 'Evidencia Estudiantil',
+          tipo: 'foto',
+          url_media: 'https://drive.google.com/file/d/1MNQ2FkRc1zPsY4Z0-5NVNBSq5hNm0fOY/view',
+          descripcion: 'Evidencia fotográfica del trabajo en equipo y codificación en la especialidad de Programación.'
+        },
+        {
+          id: 'prog-drive-6',
+          titulo: 'Exposición de Proyectos de Programación 6',
+          alumnos: 'Academia de Programación CETis 7',
+          semestre: 'Evidencia Estudiantil',
+          tipo: 'foto',
+          url_media: 'https://drive.google.com/file/d/1x807lzHR4UJUFCjwaPWvjObD7kWXU05R/view',
+          descripcion: 'Muestra estudiantil de sistemas y aplicaciones desarrolladas en la carrera de Programación.'
         }
       ]
     },

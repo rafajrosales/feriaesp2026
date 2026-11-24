@@ -812,6 +812,7 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                                 <img
                                   src={parsed.thumbnailUrl}
                                   alt={item.titulo}
+                                  referrerPolicy="no-referrer"
                                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                 />
                               ) : (
@@ -943,6 +944,7 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                           <img
                             src={parsed.embedUrl}
                             alt={activeLightboxItem.titulo}
+                            referrerPolicy="no-referrer"
                             className="max-h-[60vh] w-auto object-contain"
                           />
                         </div>
