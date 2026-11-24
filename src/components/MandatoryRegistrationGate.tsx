@@ -1,5 +1,5 @@
 import React, { useState, useSyncExternalStore } from 'react';
-import { Estudiante, TutorLegal, GRUPOS_PRIMER_SEMESTRE } from '../types';
+import { Estudiante, TutorLegal, DocenteAcceso, GRUPOS_PRIMER_SEMESTRE } from '../types';
 import {
   getDbStoreSnapshot,
   subscribeDbStore,
@@ -9,7 +9,8 @@ import {
   registrarNuevoEstudiante,
   setSesionActiva,
   setEstudianteActivoNC,
-  SesionUsuario
+  SesionUsuario,
+  autenticarDocentePorClave
 } from '../services/storage';
 import { cloudCheckCurpAvailable, cloudCheckNumControlAvailable } from '../services/firebase';
 import {
@@ -38,9 +39,12 @@ interface MandatoryRegistrationGateProps {
   onOpenTutorial?: () => void;
   firebaseUser?: User | null;
   isGoogleAdmin?: boolean;
+  docenteAcceso?: DocenteAcceso | null;
+  isAuthorizedDocente?: boolean;
   onGoogleSignIn?: () => Promise<void> | void;
   onGoogleSignOut?: () => Promise<void> | void;
   onEnterAsGoogleAdmin?: () => void;
+  onEnterAsDocente?: () => void;
   authLoading?: boolean;
   authError?: string | null;
 }
@@ -50,9 +54,12 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
   onOpenTutorial,
   firebaseUser,
   isGoogleAdmin = false,
+  docenteAcceso = null,
+  isAuthorizedDocente = false,
   onGoogleSignIn,
   onGoogleSignOut,
   onEnterAsGoogleAdmin,
+  onEnterAsDocente,
   authLoading = false,
   authError = null
 }) => {
@@ -78,6 +85,40 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
 
   const [loginQuery, setLoginQuery] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  const [docenteIdentificador, setDocenteIdentificador] = useState('');
+  const [docenteClave, setDocenteClave] = useState('');
+  const [docenteLoginError, setDocenteLoginError] = useState<string | null>(null);
+  const [docenteLoginLoading, setDocenteLoginLoading] = useState(false);
+
+  const handleDocenteClaveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDocenteLoginError(null);
+    setDocenteLoginLoading(true);
+    try {
+      const res = await autenticarDocentePorClave(docenteIdentificador, docenteClave);
+      if (!res.success || !res.docente) {
+        setDocenteLoginError(res.error || 'Credenciales de docente inválidas.');
+        return;
+      }
+      const isMaster = res.docente.id === 'DOC-MASTER-DIR';
+      const sesionDoc: SesionUsuario = {
+        tipo: 'docente',
+        esAdmin: isMaster,
+        esEditor: isMaster || res.docente.nivel_acceso === 'editor',
+        rolDocente: res.docente.rol,
+        docenteId: res.docente.id,
+        docenteEmail: res.docente.correo_institucional,
+        nombre: `${res.docente.nombre_completo} (${res.docente.rol} - ${res.docente.nivel_acceso === 'editor' ? 'Editor' : 'Lector'})`
+      };
+      setSesionActiva(sesionDoc);
+      onAccessGranted(undefined, sesionDoc);
+    } catch (err: unknown) {
+      setDocenteLoginError(err instanceof Error ? err.message : 'Error al validar credenciales en Firebase.');
+    } finally {
+      setDocenteLoginLoading(false);
+    }
+  };
 
   const isFirebaseVerified = Boolean(firebaseUser?.emailVerified);
   const isOnlineConnected = dbSnapshot.online && isFirebaseVerified && !dbSnapshot.syncError;
@@ -395,7 +436,9 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
                         {dbSnapshot.loading
                           ? 'Sincronizando base de datos en tiempo real...'
                           : isGoogleAdmin
-                          ? 'Cuenta con permisos de Dirección Académica listos para ingresar.'
+                          ? 'Cuenta administradora única con permisos completos en Dirección Académica.'
+                          : isAuthorizedDocente
+                          ? `Docente autorizado (${docenteAcceso?.rol || 'Academia'}) listo para ingresar a Dirección.`
                           : estudiantesPropiosGoogle.length > 0
                           ? `Tienes ${estudiantesPropiosGoogle.length} matrícula(s) vinculada(s) lista(s) para entrar.`
                           : 'Conexión en línea lista. Completa tu registro escolar abajo.'}
@@ -409,6 +452,16 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
                           className="px-3.5 py-2 rounded-lg bg-[#721B32] hover:bg-[#5b1528] text-white font-bold text-xs shadow-xs cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
                         >
                           <span>Entrar a Dirección</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {!isGoogleAdmin && isAuthorizedDocente && onEnterAsDocente && (
+                        <button
+                          type="button"
+                          onClick={onEnterAsDocente}
+                          className="px-3.5 py-2 rounded-lg bg-[#721B32] hover:bg-[#5b1528] text-white font-bold text-xs shadow-xs cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                        >
+                          <span>Entrar a Dirección (Docente)</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       )}
@@ -900,59 +953,72 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
                     <Building2 className="w-5 h-5 sm:w-6 sm:h-6 text-amber-300" />
                   </div>
                   <h3 className="text-sm sm:text-base font-bold text-stone-900 pt-1">
-                    Autenticación de Dirección Académica
+                    Acceso Dirección y Personal Docente
                   </h3>
                   <p className="text-xs text-stone-600 leading-relaxed">
-                    El módulo directivo está protegido mediante Google Auth y reglas de seguridad en Cloud Firestore. La única cuenta administradora autorizada para cambios es <strong>rafajrosales@gmail.com</strong>.
+                    Los docentes ingresan con el registro dado de alta por el administrador (Correo o RFC y Clave de Acceso / PIN). El administrador único (rafajrosales@gmail.com) ingresa mediante Google Auth.
                   </p>
                 </div>
 
-                {isFirebaseVerified ? (
-                  isGoogleAdmin ? (
-                    <div className="space-y-3">
-                      <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950 flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span>Cuenta autorizada: <strong>{firebaseUser?.email}</strong></span>
-                      </div>
-                      {onEnterAsGoogleAdmin && (
-                        <button
-                          type="button"
-                          onClick={onEnterAsGoogleAdmin}
-                          className="w-full py-3 bg-[#721B32] hover:bg-[#5b1528] text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <ShieldCheck className="w-4 h-4 text-amber-300" />
-                          <span>Entrar al Tablero de Dirección</span>
-                        </button>
-                      )}
+                <form onSubmit={handleDocenteClaveSubmit} className="space-y-4 pt-2">
+                  {docenteLoginError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <div className="flex-1 font-medium">{docenteLoginError}</div>
                     </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950">
-                        La cuenta conectada (<strong>{firebaseUser?.email}</strong>) no cuenta con rol de Dirección en Firebase.
-                      </div>
-                      {onGoogleSignOut && (
-                        <button
-                          type="button"
-                          onClick={() => void onGoogleSignOut()}
-                          className="w-full py-2.5 bg-white border border-stone-300 text-stone-800 rounded-xl text-xs font-bold hover:bg-stone-50 cursor-pointer"
-                        >
-                          Cambiar a cuenta Google institucional
-                        </button>
-                      )}
-                    </div>
-                  )
-                ) : (
-                  onGoogleSignIn && (
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Correo Institucional o RFC *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. profesor@cetis7.edu.mx o EASM78..."
+                      value={docenteIdentificador}
+                      onChange={e => setDocenteIdentificador(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs border border-stone-300 rounded-xl font-mono-code focus:ring-2 focus:ring-[#721B32] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-stone-800 mb-1">
+                      Clave de Acceso / PIN *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Ej. PROG2026"
+                      value={docenteClave}
+                      onChange={e => setDocenteClave(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs border border-stone-300 rounded-xl font-mono-code focus:ring-2 focus:ring-[#721B32] focus:outline-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={docenteLoginLoading}
+                    className="w-full py-3 bg-[#721B32] hover:bg-[#5b1528] disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-amber-300" />
+                    <span>{docenteLoginLoading ? 'Validando datos en Firebase...' : 'Entrar como Docente'}</span>
+                  </button>
+                </form>
+
+                {onGoogleSignIn && (
+                  <div className="pt-4 border-t border-stone-200 text-center">
+                    <span className="text-[11px] text-stone-500 block mb-2">¿Eres el administrador único (rafajrosales@gmail.com)?</span>
                     <button
                       type="button"
                       disabled={authLoading || !dbSnapshot.online}
                       onClick={() => void onGoogleSignIn()}
-                      className="w-full py-3 bg-[#721B32] hover:bg-[#5b1528] disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                      className="w-full py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-xl text-xs font-bold transition-colors border border-stone-300 flex items-center justify-center gap-2 cursor-pointer"
                     >
-                      <ShieldCheck className="w-4 h-4 text-amber-300" />
-                      <span>{authLoading ? 'Conectando...' : 'Conectar Cuenta Google de Dirección'}</span>
+                      <ShieldCheck className="w-4 h-4 text-[#721B32]" />
+                      <span>{authLoading ? 'Conectando...' : 'Entrar como Administrador (Google)'}</span>
                     </button>
-                  )
+                  </div>
                 )}
               </div>
             )}

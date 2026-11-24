@@ -157,10 +157,14 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Zone 3: Actions & Mobile Hamburger */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {sesionActiva && (
-              <div className="hidden lg:flex items-center gap-1.5 text-xs bg-stone-100 border border-stone-200 px-2.5 py-1.5 rounded-lg">
+              <div className="hidden lg:flex items-center gap-1.5 text-xs bg-stone-100 border border-stone-200 px-2.5 py-1.5 rounded-lg" title={sesionActiva.nombre || 'Sesión activa'}>
                 <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <div className="max-w-[120px] truncate text-stone-800 font-medium">
-                  {sesionActiva.tipo === 'alumno' ? sesionActiva.nombre || 'Alumno' : 'Dirección DGETI'}
+                <div className="max-w-[150px] truncate text-stone-800 font-medium">
+                  {sesionActiva.tipo === 'alumno'
+                    ? sesionActiva.nombre || 'Alumno'
+                    : sesionActiva.esAdmin
+                    ? 'Dirección (Admin)'
+                    : sesionActiva.nombre || 'Docente Dirección'}
                 </div>
               </div>
             )}

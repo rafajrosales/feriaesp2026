@@ -225,10 +225,22 @@ export interface DocenteAutorizado {
   correo_institucional: string;
   academia: SpecialtyId | 'general';
   rol: 'Profesor Titular' | 'Jefe de Academia' | 'Tutor Escolar' | 'Subdirector';
+  nivel_acceso: 'editor' | 'lector';
   clave_acceso: string;
   estatus_autorizacion: 'AUTORIZADO' | 'PENDIENTE' | 'REVOCADO';
   fecha_alta: string;
   registrado_por?: string;
+}
+
+export interface DocenteAcceso {
+  email: string;
+  docente_id: string;
+  nombre_completo: string;
+  academia: SpecialtyId | 'general';
+  rol: 'Profesor Titular' | 'Jefe de Academia' | 'Tutor Escolar' | 'Subdirector';
+  nivel_acceso: 'editor' | 'lector';
+  clave_acceso: string;
+  estatus_autorizacion: 'AUTORIZADO' | 'PENDIENTE' | 'REVOCADO';
 }
 
 export interface AccesoGoogleEvento {

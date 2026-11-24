@@ -19,10 +19,11 @@ import {
   signInWithGooglePopup,
   signOutFirebase,
   checkIsFirebaseAdmin,
+  checkDocenteAcceso,
   FIREBASE_PROJECT_ID
 } from './services/firebase';
 import type { User } from 'firebase/auth';
-import { Estudiante, ProgresoVirtual, EvaluacionVocacional } from './types';
+import { Estudiante, ProgresoVirtual, EvaluacionVocacional, DocenteAcceso } from './types';
 import { Header, MainNavTab } from './components/Header';
 import { StudentProfileBanner } from './components/StudentProfileBanner';
 import { VocationalDiagnostic } from './components/VocationalDiagnostic';
@@ -48,9 +49,16 @@ export default function App() {
 
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [isGoogleAdmin, setIsGoogleAdmin] = useState<boolean>(false);
+  const [checkedDocenteAcceso, setCheckedDocenteAcceso] = useState<DocenteAcceso | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [syncActionError, setSyncActionError] = useState<string | null>(null);
+
+  const activeDocenteAcceso = dbSnapshot.docenteAcceso ?? checkedDocenteAcceso;
+  const isAuthorizedDocente = Boolean(
+    activeDocenteAcceso && activeDocenteAcceso.estatus_autorizacion === 'AUTORIZADO'
+  );
+  const hasDirectionAccess = isGoogleAdmin || isAuthorizedDocente || (sesionActiva?.tipo === 'docente');
 
   const handleOpenHelp = (tab: 'fundamentacion' | 'docentes' | 'alumnos' = 'docentes') => {
     setHelpDefaultTab(tab);
@@ -84,22 +92,31 @@ export default function App() {
       setFirebaseUser(user);
       if (user && user.emailVerified) {
         void (async () => {
-          const adminFlag = await checkIsFirebaseAdmin(user);
+          const [adminFlag, docAcc] = await Promise.all([
+            checkIsFirebaseAdmin(user),
+            checkDocenteAcceso(user)
+          ]);
           if (!active) return;
           setIsGoogleAdmin(adminFlag);
+          setCheckedDocenteAcceso(docAcc);
+          const docAuthorized = Boolean(docAcc && docAcc.estatus_autorizacion === 'AUTORIZADO');
           const currentSes = getSesionActiva();
-          if (currentSes?.tipo === 'docente' && !adminFlag) {
+          if (currentSes?.tipo === 'docente' && !adminFlag && !docAuthorized && !currentSes.docenteId) {
             cerrarSesion();
             setSesionActivaState(null);
           }
-          await connectOnlineDatabase(user, adminFlag);
+          await connectOnlineDatabase(user, adminFlag, docAcc);
           void registrarAccesoGoogleEnNube(user, adminFlag, 'sesion_activa');
         })();
       } else {
         setIsGoogleAdmin(false);
-        disconnectOnlineDatabase();
-        cerrarSesion();
-        setSesionActivaState(null);
+        setCheckedDocenteAcceso(null);
+        const currentSes = getSesionActiva();
+        if (currentSes?.esAdmin && !currentSes?.docenteId) {
+          cerrarSesion();
+          setSesionActivaState(null);
+          disconnectOnlineDatabase();
+        }
       }
     });
     return () => {
@@ -130,16 +147,28 @@ export default function App() {
         return;
       }
 
-      const adminFlag = await checkIsFirebaseAdmin(user);
+      const [adminFlag, docAcc] = await Promise.all([
+        checkIsFirebaseAdmin(user),
+        checkDocenteAcceso(user)
+      ]);
       setIsGoogleAdmin(adminFlag);
-      await connectOnlineDatabase(user, adminFlag);
+      setCheckedDocenteAcceso(docAcc);
+      await connectOnlineDatabase(user, adminFlag, docAcc);
       void registrarAccesoGoogleEnNube(user, adminFlag, 'login_interactivo');
 
+      const docAuthorized = Boolean(docAcc && docAcc.estatus_autorizacion === 'AUTORIZADO');
+
       if (!getSesionActiva()) {
-        if (adminFlag) {
+        if (adminFlag || docAuthorized) {
           const sesionDir: SesionUsuario = {
             tipo: 'docente',
-            nombre: user.displayName ? `${user.displayName} (Dirección)` : `${user.email || 'Dirección Académica CETis 7'}`
+            esAdmin: adminFlag,
+            rolDocente: adminFlag ? 'Administrador Único' : docAcc?.rol,
+            nombre: adminFlag
+              ? user.displayName
+                ? `${user.displayName} (Dirección)`
+                : `${user.email || 'Dirección Académica CETis 7'}`
+              : `${docAcc?.nombre_completo || user.displayName || user.email} (${docAcc?.rol || 'Docente'})`
           };
           setSesionActiva(sesionDir);
           setSesionActivaState(sesionDir);
@@ -178,7 +207,20 @@ export default function App() {
     if (!firebaseUser || !firebaseUser.emailVerified || !isGoogleAdmin) return;
     const sesionDir: SesionUsuario = {
       tipo: 'docente',
+      esAdmin: true,
+      rolDocente: 'Administrador Único',
       nombre: firebaseUser.displayName ? `${firebaseUser.displayName} (Dirección)` : `${firebaseUser.email || 'Dirección Académica CETis 7'}`
+    };
+    handleAccessGranted(undefined, sesionDir);
+  };
+
+  const handleEnterAsDocente = () => {
+    if (!firebaseUser || !firebaseUser.emailVerified || !isAuthorizedDocente || !activeDocenteAcceso) return;
+    const sesionDir: SesionUsuario = {
+      tipo: 'docente',
+      esAdmin: false,
+      rolDocente: activeDocenteAcceso.rol,
+      nombre: `${activeDocenteAcceso.nombre_completo} (${activeDocenteAcceso.rol})`
     };
     handleAccessGranted(undefined, sesionDir);
   };
@@ -190,6 +232,7 @@ export default function App() {
     setSesionActivaState(null);
     setFirebaseUser(null);
     setIsGoogleAdmin(false);
+    setCheckedDocenteAcceso(null);
     setAuthError(null);
     setSyncActionError(null);
   };
@@ -276,9 +319,12 @@ export default function App() {
           onOpenTutorial={() => setMostrarTutorial(true)}
           firebaseUser={firebaseUser}
           isGoogleAdmin={isGoogleAdmin}
+          docenteAcceso={activeDocenteAcceso}
+          isAuthorizedDocente={isAuthorizedDocente}
           onGoogleSignIn={handleGoogleSignIn}
           onGoogleSignOut={handleGoogleSignOut}
           onEnterAsGoogleAdmin={handleEnterAsGoogleAdmin}
+          onEnterAsDocente={handleEnterAsDocente}
           authLoading={authLoading}
           authError={authError}
         />
@@ -516,8 +562,8 @@ export default function App() {
         )}
 
         {/* TAB 4: Dirección & Subdirección Académica */}
-        {activeTab === 'direccion' && isGoogleAdmin && (
-          <AcademicDirection />
+        {activeTab === 'direccion' && hasDirectionAccess && (
+          <AcademicDirection isAdmin={isGoogleAdmin} docenteAcceso={activeDocenteAcceso} />
         )}
       </main>
 
@@ -554,13 +600,15 @@ export default function App() {
         nombreEstudiante={estudianteActual?.nombre_completo ? estudianteActual.nombre_completo.split(' ')[0] : 'Estudiante'}
       />
 
-      {/* Direction & Subdirection Google Admin Authentication Modal */}
+      {/* Direction & Subdirection Google Auth Modal */}
       <DirectionAuthModal
         isOpen={mostrarModalDirAuth}
         onClose={() => setMostrarModalDirAuth(false)}
         onAuthSuccess={handleAuthDirSuccess}
         firebaseUser={firebaseUser}
         isGoogleAdmin={isGoogleAdmin}
+        docenteAcceso={activeDocenteAcceso}
+        isAuthorizedDocente={isAuthorizedDocente}
         onGoogleSignIn={handleGoogleSignIn}
         onGoogleSignOut={handleGoogleSignOut}
         authLoading={authLoading}

@@ -66,7 +66,7 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
   const currentProgress = progreso.progreso_especialidades[selectedId];
   const hasActiveStudent = Boolean(progreso.num_control && progreso.num_control.trim());
   const canUpdateProgreso =
-    hasActiveStudent && (sesionActiva?.tipo === 'docente' || progreso.estatus_fase_virtual !== 'COMPLETADO');
+    hasActiveStudent && (dbSnapshot.isAdmin || progreso.estatus_fase_virtual !== 'COMPLETADO');
 
   const cloneAndUpdateSpecialty = (patch: Partial<ProgresoEspecialidad>) => {
     if (!canUpdateProgreso) return;

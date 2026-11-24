@@ -1,6 +1,6 @@
 # Especificación de Seguridad Firestore — Feria de Especialidades CETis No. 7
 
-## 1. Arquitectura de Base de Datos Única en Línea (9 Colecciones Normalizadas)
+## 1. Arquitectura de Base de Datos Única en Línea (10 Colecciones Normalizadas)
 
 Toda persistencia de la plataforma (tanto en AI Studio como en producción en `https://feriac7.vercel.app/`) opera exclusivamente en línea contra la base única de Cloud Firestore (`gen-lang-client-0550420170` / `ai-studio-cetisno7feriadee-0d6232a8-7486-4926-bbe7-5550c23951e3`), sin almacenamiento local (`localStorage`) ni modo offline:
 
@@ -11,8 +11,9 @@ Toda persistencia de la plataforma (tanto en AI Studio como en producción en `h
 5. `/evaluaciones/{numControl}` — Resultados normalizados del Test Vocacional de 40 reactivos (sin campos derivados redundantes).
 6. `/progresos/{numControl}` — Avance integral (0–100%) y Constancia QR.
 7. `/docentes/{docenteId}` — Padrón confidencial de docentes (solo administrador).
-8. `/fichas_academia/{especialidadId}` — Fuente única de verdad para metadata, multimedia (`video_academia`, `galeria_alumnos`) y `banco_reactivos` de las 4 especialidades.
-9. `/configuracion/{configId}` — Configuración institucional única (`oficio_circular`).
+8. `/docente_accesos/{emailId}` — Índice normalizado por correo electrónico para habilitar la entrada en modo consulta en Dirección a los docentes con estatus `AUTORIZADO`.
+9. `/fichas_academia/{especialidadId}` — Fuente única de verdad para metadata, multimedia (`video_academia`, `galeria_alumnos`) y `banco_reactivos` de las 4 especialidades.
+10. `/configuracion/{configId}` — Configuración institucional única (`oficio_circular`).
 
 ## 2. Invariantes de Datos (Data Invariants)
 

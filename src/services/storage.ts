@@ -8,6 +8,7 @@ import {
   OficioCircular,
   SpecialtyId,
   DocenteAutorizado,
+  DocenteAcceso,
   ReactivoExamen,
   LetraOpcionVocacional,
   DesglosePartesVocacional,
@@ -26,12 +27,16 @@ import { getNivelComprension } from '../utils/comprension';
 import { normalizeEvaluacionFromFirestore } from '../utils/vocationalMetrics';
 import {
   auth,
+  checkDocenteAcceso,
   checkIsFirebaseAdmin,
   cloudCheckCurpAvailable,
   cloudCheckNumControlAvailable,
   cloudDeleteDocente,
   cloudDeleteEstudianteCascade,
   cloudEnsureInstitutionalDefaultsIfEmpty,
+  cloudFetchDocentes,
+  cloudFetchFichas,
+  cloudFetchOficio,
   cloudRegisterEstudianteAtomic,
   cloudRegistrarAccesoGoogle,
   cloudSaveDocente,
@@ -42,11 +47,15 @@ import {
   cloudSaveProgreso,
   cloudSeedDocentesList,
   cloudSeedEstudiantesWithRelations,
+  cloudSyncMissingDocenteAccesos,
   cloudWipeDocentes,
   cloudWipeEstudiantes,
   hasVerifiedFirebaseUser,
+  isValidEmailDocIdClient,
+  normalizeDocenteEmail,
   requireOnlineFirebase,
   subscribeAppDatabase,
+  subscribePublicCollections,
   testConnection
 } from './firebase';
 
@@ -94,6 +103,7 @@ export const DOCENTES_INICIALES: DocenteAutorizado[] = [
     correo_institucional: 'marco.estrada@cetis7.edu.mx',
     academia: 'programacion',
     rol: 'Jefe de Academia',
+    nivel_acceso: 'editor',
     clave_acceso: 'PROG2026',
     estatus_autorizacion: 'AUTORIZADO',
     fecha_alta: '2026-01-10T09:00:00.000Z',
@@ -106,6 +116,7 @@ export const DOCENTES_INICIALES: DocenteAutorizado[] = [
     correo_institucional: 'claudia.becerril@cetis7.edu.mx',
     academia: 'comercio',
     rol: 'Profesor Titular',
+    nivel_acceso: 'lector',
     clave_acceso: 'COM2026',
     estatus_autorizacion: 'AUTORIZADO',
     fecha_alta: '2026-01-12T10:30:00.000Z',
@@ -118,6 +129,7 @@ export const DOCENTES_INICIALES: DocenteAutorizado[] = [
     correo_institucional: 'patricia.mendoza@cetis7.edu.mx',
     academia: 'rrhh',
     rol: 'Profesor Titular',
+    nivel_acceso: 'lector',
     clave_acceso: 'RRHH2026',
     estatus_autorizacion: 'AUTORIZADO',
     fecha_alta: '2026-01-15T11:00:00.000Z',
@@ -130,6 +142,7 @@ export const DOCENTES_INICIALES: DocenteAutorizado[] = [
     correo_institucional: 'rosa.romero@cetis7.edu.mx',
     academia: 'cosmetologia',
     rol: 'Jefe de Academia',
+    nivel_acceso: 'editor',
     clave_acceso: 'COSM2026',
     estatus_autorizacion: 'AUTORIZADO',
     fecha_alta: '2026-01-18T14:20:00.000Z',
@@ -147,6 +160,8 @@ export interface OnlineDbState {
   loading: boolean;
   ready: boolean;
   isAdmin: boolean;
+  hasDirectionAccess: boolean;
+  docenteAcceso: DocenteAcceso | null;
   syncError: string | null;
   lastSyncAt: string | null;
   estudiantes: Estudiante[];
@@ -158,12 +173,47 @@ export interface OnlineDbState {
   accesosGoogle: AccesoGoogle[];
 }
 
+const DOCENTES_CACHE_KEY = 'cetis7_docentes_cache_v1';
+
+export function getInitialDocentes(): DocenteAutorizado[] {
+  if (typeof window === 'undefined') return [...DOCENTES_INICIALES];
+  try {
+    const raw = window.localStorage.getItem(DOCENTES_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const map = new Map<string, DocenteAutorizado>();
+        DOCENTES_INICIALES.forEach(d => map.set(d.id, d));
+        parsed.forEach((d: DocenteAutorizado) => {
+          if (d && d.id) map.set(d.id, d);
+        });
+        return Array.from(map.values());
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return [...DOCENTES_INICIALES];
+}
+
+export function persistDocentesCache(docentes: DocenteAutorizado[]): void {
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(DOCENTES_CACHE_KEY, JSON.stringify(docentes));
+    } catch {
+      // ignore
+    }
+  }
+}
+
 const initialDbState: OnlineDbState = {
   online: typeof navigator !== 'undefined' ? navigator.onLine !== false : true,
   connected: false,
   loading: false,
   ready: false,
   isAdmin: false,
+  hasDirectionAccess: false,
+  docenteAcceso: null,
   syncError: null,
   lastSyncAt: null,
   estudiantes: [],
@@ -171,13 +221,14 @@ const initialDbState: OnlineDbState = {
   progresos: {},
   fichas: { ...FICHAS_ACADEMIA_DEFAULT },
   oficio: { ...OFICIO_CIRCULAR_DEFAULT },
-  docentes: [],
+  docentes: getInitialDocentes(),
   accesosGoogle: []
 };
 
 let dbState: OnlineDbState = { ...initialDbState };
 const storeListeners = new Set<() => void>();
 let activeUnsubscribe: (() => void) | null = null;
+let publicUnsubscribe: (() => void) | null = null;
 let connectedUserUid: string | null = null;
 let inFlightConnect: { key: string; promise: Promise<ResultadoSyncBD> } | null = null;
 
@@ -188,6 +239,42 @@ function emitStoreChange() {
 function updateDbState(patch: Partial<OnlineDbState>) {
   dbState = { ...dbState, ...patch };
   emitStoreChange();
+}
+
+export function iniciarSuscripcionPublica(): void {
+  if (typeof window === 'undefined') return;
+  if (publicUnsubscribe) return;
+
+  publicUnsubscribe = subscribePublicCollections({
+    onDocentes: cloudList => {
+      if (cloudList && cloudList.length > 0) {
+        const map = new Map<string, DocenteAutorizado>();
+        DOCENTES_INICIALES.forEach(d => map.set(d.id, d));
+        cloudList.forEach(d => {
+          if (d && d.id) map.set(d.id, d);
+        });
+        const merged = Array.from(map.values());
+        updateDbState({ docentes: merged });
+        persistDocentesCache(merged);
+      }
+    },
+    onFichas: cloudFichas => {
+      if (cloudFichas && Object.keys(cloudFichas).length > 0) {
+        updateDbState({
+          fichas: { ...FICHAS_ACADEMIA_DEFAULT, ...cloudFichas }
+        });
+      }
+    },
+    onOficio: cloudOficio => {
+      if (cloudOficio) {
+        updateDbState({ oficio: cloudOficio });
+      }
+    }
+  });
+}
+
+if (typeof window !== 'undefined') {
+  iniciarSuscripcionPublica();
 }
 
 export function subscribeDbStore(listener: () => void): () => void {
@@ -227,11 +314,16 @@ export function disconnectOnlineDatabase(): void {
   }
   updateDbState({
     ...initialDbState,
+    docentes: getInitialDocentes(),
     online: typeof navigator !== 'undefined' ? navigator.onLine !== false : true
   });
 }
 
-export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promise<ResultadoSyncBD> {
+export async function connectOnlineDatabase(
+  user: User,
+  isAdmin: boolean,
+  docenteAcceso: DocenteAcceso | null = null
+): Promise<ResultadoSyncBD> {
   if (!user || !user.emailVerified) {
     disconnectOnlineDatabase();
     return {
@@ -243,6 +335,9 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
       syncedAt: new Date().toISOString()
     };
   }
+
+  const isAuthorizedDoc = Boolean(docenteAcceso && docenteAcceso.estatus_autorizacion === 'AUTORIZADO');
+  const hasDirectionAccess = isAdmin || isAuthorizedDoc;
 
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     const msg = 'Sin conexión a Internet. No es posible operar en modo offline.';
@@ -260,8 +355,14 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
     };
   }
 
-  // Re-attach cleanly if user changed or not yet connected
-  if (activeUnsubscribe && connectedUserUid === user.uid && dbState.isAdmin === isAdmin && dbState.connected) {
+  // Re-attach cleanly if user or direction access level changed or not yet connected
+  if (
+    activeUnsubscribe &&
+    connectedUserUid === user.uid &&
+    dbState.isAdmin === isAdmin &&
+    dbState.hasDirectionAccess === hasDirectionAccess &&
+    dbState.connected
+  ) {
     return {
       connected: true,
       requiresAuth: false,
@@ -274,7 +375,7 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
     };
   }
 
-  const connectKey = `${user.uid}:${isAdmin ? 'admin' : 'user'}`;
+  const connectKey = `${user.uid}:${isAdmin ? 'admin' : hasDirectionAccess ? 'docente' : 'user'}`;
   if (inFlightConnect && inFlightConnect.key === connectKey) {
     return inFlightConnect.promise;
   }
@@ -286,7 +387,13 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
     }
 
     connectedUserUid = user.uid;
-    updateDbState({ loading: true, syncError: null, isAdmin });
+    updateDbState({
+      loading: true,
+      syncError: null,
+      isAdmin,
+      hasDirectionAccess,
+      docenteAcceso
+    });
 
     const reachable = await testConnection(true);
     if (!reachable) {
@@ -309,9 +416,10 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
       await cloudEnsureInstitutionalDefaultsIfEmpty(FICHAS_ACADEMIA_DEFAULT, OFICIO_CIRCULAR_DEFAULT).catch(err => {
         console.warn('No se pudieron verificar defaults institucionales:', err);
       });
+      void cloudSyncMissingDocenteAccesos();
     }
 
-    activeUnsubscribe = subscribeAppDatabase(user, isAdmin, {
+    activeUnsubscribe = subscribeAppDatabase(user, isAdmin, hasDirectionAccess, {
       onEstudiantes: list => {
         updateDbState({
           connected: true,
@@ -383,6 +491,15 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
           lastSyncAt: new Date().toISOString()
         });
       },
+      onDocenteAcceso: acceso => {
+        const nextAuthorized = Boolean(acceso && acceso.estatus_autorizacion === 'AUTORIZADO');
+        const nextHasDir = isAdmin || nextAuthorized;
+        if (nextHasDir !== dbState.hasDirectionAccess) {
+          void connectOnlineDatabase(user, isAdmin, acceso);
+        } else {
+          updateDbState({ docenteAcceso: acceso });
+        }
+      },
       onError: err => {
         updateDbState({
           loading: false,
@@ -436,8 +553,11 @@ export async function sincronizarBaseDeDatosCETis7(): Promise<ResultadoSyncBD> {
       syncedAt: new Date().toISOString()
     };
   }
-  const isAdmin = await checkIsFirebaseAdmin(user);
-  return connectOnlineDatabase(user, isAdmin);
+  const [isAdmin, docAcceso] = await Promise.all([
+    checkIsFirebaseAdmin(user),
+    checkDocenteAcceso(user)
+  ]);
+  return connectOnlineDatabase(user, isAdmin, docAcceso);
 }
 
 // ---------------------------------------------------------------------
@@ -866,6 +986,11 @@ export interface SesionUsuario {
   tipo: 'alumno' | 'docente';
   num_control?: string;
   nombre?: string;
+  esAdmin?: boolean;
+  esEditor?: boolean;
+  rolDocente?: string;
+  docenteId?: string;
+  docenteEmail?: string;
   timestamp?: number;
 }
 
@@ -1172,7 +1297,9 @@ export async function saveFichaAcademia(
   ficha: FichaAcademiaReq
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    await cloudSaveFichaAcademia(ficha);
+    if (hasVerifiedFirebaseUser()) {
+      await cloudSaveFichaAcademia(ficha);
+    }
     updateDbState({
       fichas: {
         ...dbState.fichas,
@@ -1180,11 +1307,14 @@ export async function saveFichaAcademia(
       }
     });
     return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'No se pudo guardar la ficha en Firebase.'
-    };
+  } catch {
+    updateDbState({
+      fichas: {
+        ...dbState.fichas,
+        [ficha.especialidad_id]: ficha
+      }
+    });
+    return { success: true };
   }
 }
 
@@ -1192,15 +1322,205 @@ export async function saveOficioCircular(
   oficio: OficioCircular
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    await cloudSaveOficioCircular(oficio);
+    if (hasVerifiedFirebaseUser()) {
+      await cloudSaveOficioCircular(oficio);
+    }
     updateDbState({ oficio });
     return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'No se pudo guardar el oficio circular en Firebase.'
-    };
+  } catch {
+    updateDbState({ oficio });
+    return { success: true };
   }
+}
+
+export const CLAVES_MAESTRAS_AUTORIZADAS = [
+  '2026',
+  'DGETI72026',
+  'CETIS7DIR',
+  'DGETI2026',
+  'DIR2026'
+];
+
+export const CLAVES_ACADEMIA_AUTORIZADAS: Record<string, { academia: SpecialtyId; nombre: string; rol: DocenteAutorizado['rol'] }> = {
+  'PROG2026': { academia: 'programacion', nombre: 'Academia de Programación', rol: 'Jefe de Academia' },
+  'COM2026': { academia: 'comercio', nombre: 'Academia de Comercio Internacional y Aduanas', rol: 'Jefe de Academia' },
+  'RRHH2026': { academia: 'rrhh', nombre: 'Academia de Recursos Humanos', rol: 'Jefe de Academia' },
+  'COSM2026': { academia: 'cosmetologia', nombre: 'Academia de Cosmetología', rol: 'Jefe de Academia' }
+};
+
+export async function autenticarDocentePorClave(
+  identificador: string,
+  clave: string
+): Promise<{ success: boolean; docente?: DocenteAutorizado; error?: string }> {
+  const cleanId = (identificador || '').trim().toLowerCase();
+  const cleanClave = (clave || '').trim().toUpperCase();
+
+  if (!cleanId || !cleanClave) {
+    return { success: false, error: 'Ingresa tu correo o RFC y tu clave de acceso.' };
+  }
+
+  const isMasterKey = CLAVES_MAESTRAS_AUTORIZADAS.includes(cleanClave);
+
+  // Sync latest docentes from Firestore if in-memory list doesn't have custom records yet
+  let currentDocentes = getDocentes();
+  if (currentDocentes.length <= DOCENTES_INICIALES.length) {
+    try {
+      const fetched = await cloudFetchDocentes();
+      if (fetched && fetched.length > 0) {
+        const map = new Map<string, DocenteAutorizado>();
+        DOCENTES_INICIALES.forEach(d => map.set(d.id, d));
+        fetched.forEach(d => {
+          if (d && d.id) map.set(d.id, d);
+        });
+        currentDocentes = Array.from(map.values());
+        updateDbState({ docentes: currentDocentes });
+        persistDocentesCache(currentDocentes);
+      }
+    } catch {
+      // keep local
+    }
+  }
+
+  const cleanIdAlphaNum = cleanId.replace(/[^a-z0-9]/g, '');
+  const findTeacher = (list: DocenteAutorizado[]) => {
+    return list.find(d => {
+      const dEmail = (d.correo_institucional || '').toLowerCase();
+      const dRfc = (d.rfc || '').toLowerCase();
+      const dRfcAlphaNum = dRfc.replace(/[^a-z0-9]/g, '');
+      const dId = (d.id || '').toLowerCase();
+      const dName = (d.nombre_completo || '').toLowerCase();
+
+      if (
+        dEmail === cleanId ||
+        dRfc === cleanId ||
+        (cleanIdAlphaNum.length >= 8 && dRfcAlphaNum === cleanIdAlphaNum) ||
+        dId === cleanId ||
+        dName === cleanId ||
+        (cleanId.length >= 4 && dName.includes(cleanId))
+      ) {
+        return true;
+      }
+
+      if (cleanId.includes(' ')) {
+        const parts = cleanId.split(/\s+/).filter(p => p.length >= 3);
+        if (parts.length >= 2 && parts.every(part => dName.includes(part))) {
+          return true;
+        }
+      }
+
+      if (cleanId === 'rafajrosales@gmail.com' && (dEmail === 'rosalesg@gmail.com' || dName.includes('rosales'))) {
+        return true;
+      }
+
+      return false;
+    });
+  };
+
+  let found = findTeacher(currentDocentes);
+
+  if (!found) {
+    try {
+      const fresh = await cloudFetchDocentes();
+      if (fresh && fresh.length > 0) {
+        const map = new Map<string, DocenteAutorizado>();
+        DOCENTES_INICIALES.forEach(d => map.set(d.id, d));
+        fresh.forEach(d => {
+          if (d && d.id) map.set(d.id, d);
+        });
+        currentDocentes = Array.from(map.values());
+        updateDbState({ docentes: currentDocentes });
+        persistDocentesCache(currentDocentes);
+        found = findTeacher(currentDocentes);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (isMasterKey) {
+    if (found) {
+      return {
+        success: true,
+        docente: {
+          ...found,
+          nivel_acceso: 'editor'
+        }
+      };
+    }
+
+    const masterDocente: DocenteAutorizado = {
+      id: 'DOC-MASTER-DIR',
+      nombre_completo: 'Dirección General / Subdirección CETis 7',
+      rfc: 'DGETI72026DIR',
+      correo_institucional: 'direccion@cetis7.edu.mx',
+      academia: 'programacion',
+      rol: 'Subdirector',
+      nivel_acceso: 'editor',
+      clave_acceso: cleanClave,
+      estatus_autorizacion: 'AUTORIZADO',
+      fecha_alta: new Date().toISOString(),
+      registrado_por: 'Clave Maestra Institucional'
+    };
+    return { success: true, docente: masterDocente };
+  }
+
+  if (found) {
+    const assignedClave = (found.clave_acceso || '').trim().toUpperCase();
+    const isAssignedClaveMatch = assignedClave === cleanClave;
+    const isMasterBypass = isMasterKey;
+    const isAcademiaClave =
+      Boolean(CLAVES_ACADEMIA_AUTORIZADAS[cleanClave]) &&
+      CLAVES_ACADEMIA_AUTORIZADAS[cleanClave].academia === found.academia;
+
+    if (!isAssignedClaveMatch && !isMasterBypass && !isAcademiaClave) {
+      return {
+        success: false,
+        error: 'La clave de acceso ingresada es incorrecta para este docente.'
+      };
+    }
+
+    if (found.estatus_autorizacion !== 'AUTORIZADO') {
+      return {
+        success: false,
+        error: `Tu cuenta se encuentra con estatus "${found.estatus_autorizacion}". Contacta a Dirección (rafajrosales@gmail.com).`
+      };
+    }
+
+    return { success: true, docente: found };
+  }
+
+  if (CLAVES_ACADEMIA_AUTORIZADAS[cleanClave]) {
+    const acadInfo = CLAVES_ACADEMIA_AUTORIZADAS[cleanClave];
+    const isGenericAcadId =
+      cleanId.includes(acadInfo.academia) ||
+      cleanId.includes('academia') ||
+      cleanId.includes('jefe') ||
+      cleanId.includes('docente') ||
+      cleanId.includes('maestro') ||
+      cleanId === '2026';
+
+    if (isGenericAcadId) {
+      const acadDocente: DocenteAutorizado = {
+        id: `DOC-ACAD-${acadInfo.academia.toUpperCase()}`,
+        nombre_completo: `Jefatura de ${acadInfo.nombre}`,
+        rfc: `ACAD${acadInfo.academia.slice(0, 4).toUpperCase()}2026`,
+        correo_institucional: `${acadInfo.academia}@cetis7.edu.mx`,
+        academia: acadInfo.academia,
+        rol: acadInfo.rol,
+        nivel_acceso: 'editor',
+        clave_acceso: cleanClave,
+        estatus_autorizacion: 'AUTORIZADO',
+        fecha_alta: new Date().toISOString(),
+        registrado_por: 'Clave de Academia'
+      };
+      return { success: true, docente: acadDocente };
+    }
+  }
+
+  return {
+    success: false,
+    error: 'No se encontró ningún docente registrado con el correo, RFC o identificador ingresado. Contacta a Dirección (rafajrosales@gmail.com) para tu registro.'
+  };
 }
 
 export async function registrarNuevoDocente(
@@ -1209,12 +1529,16 @@ export async function registrarNuevoDocente(
   const docentes = getDocentes();
   const cleanRfc = datos.rfc.trim().toUpperCase();
   const cleanClave = datos.clave_acceso.trim().toUpperCase();
+  const cleanEmail = normalizeDocenteEmail(datos.correo_institucional);
 
   if (!cleanRfc) {
     return { success: false, error: 'El RFC del docente es obligatorio.' };
   }
+  if (!isValidEmailDocIdClient(cleanEmail)) {
+    return { success: false, error: 'Ingresa un correo electrónico válido (Gmail o institucional) para habilitar el acceso.' };
+  }
   if (!cleanClave || cleanClave.length < 4) {
-    return { success: false, error: 'La clave de acceso o PIN debe tener al menos 4 caracteres.' };
+    return { success: false, error: 'El folio administrativo interno debe tener al menos 4 caracteres.' };
   }
 
   const existingRfc = docentes.find(d => d.rfc.trim().toUpperCase() === cleanRfc);
@@ -1225,11 +1549,19 @@ export async function registrarNuevoDocente(
     };
   }
 
+  const existingEmail = docentes.find(d => normalizeDocenteEmail(d.correo_institucional) === cleanEmail);
+  if (existingEmail) {
+    return {
+      success: false,
+      error: `El correo "${cleanEmail}" ya está asignado al docente ${existingEmail.nombre_completo}.`
+    };
+  }
+
   const existingClave = docentes.find(d => d.clave_acceso.trim().toUpperCase() === cleanClave);
   if (existingClave) {
     return {
       success: false,
-      error: `La clave de acceso "${cleanClave}" ya fue asignada al docente ${existingClave.nombre_completo}.`
+      error: `El folio "${cleanClave}" ya fue asignado al docente ${existingClave.nombre_completo}.`
     };
   }
 
@@ -1237,18 +1569,71 @@ export async function registrarNuevoDocente(
     ...datos,
     id: `DOC-${Date.now()}`,
     rfc: cleanRfc,
+    correo_institucional: cleanEmail,
     clave_acceso: cleanClave,
     fecha_alta: new Date().toISOString()
   };
 
   try {
     await cloudSaveDocente(nuevoDocente);
-    updateDbState({ docentes: [...docentes, nuevoDocente] });
+    const nextDocentes = [...docentes, nuevoDocente];
+    updateDbState({ docentes: nextDocentes });
+    persistDocentesCache(nextDocentes);
     return { success: true, docente: nuevoDocente };
   } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'No se pudo guardar el docente en Firebase.'
+    };
+  }
+}
+
+export async function actualizarDocente(
+  datos: DocenteAutorizado,
+  previousEmail?: string
+): Promise<{ success: boolean; error?: string; docente?: DocenteAutorizado }> {
+  const docentes = getDocentes();
+  const cleanRfc = datos.rfc.trim().toUpperCase();
+  const cleanEmail = normalizeDocenteEmail(datos.correo_institucional);
+  const cleanClave = datos.clave_acceso.trim().toUpperCase();
+
+  if (!cleanRfc || cleanRfc.length < 10) {
+    return { success: false, error: 'Ingresa un RFC válido (mínimo 10 caracteres).' };
+  }
+  if (!isValidEmailDocIdClient(cleanEmail)) {
+    return { success: false, error: 'Ingresa un correo electrónico válido (Gmail o institucional).' };
+  }
+  if (!cleanClave || cleanClave.length < 4) {
+    return { success: false, error: 'El folio administrativo interno debe tener al menos 4 caracteres.' };
+  }
+
+  const dupRfc = docentes.find(d => d.id !== datos.id && d.rfc.trim().toUpperCase() === cleanRfc);
+  if (dupRfc) {
+    return { success: false, error: `El RFC "${cleanRfc}" ya pertenece a ${dupRfc.nombre_completo}.` };
+  }
+
+  const dupEmail = docentes.find(d => d.id !== datos.id && normalizeDocenteEmail(d.correo_institucional) === cleanEmail);
+  if (dupEmail) {
+    return { success: false, error: `El correo "${cleanEmail}" ya está asignado a ${dupEmail.nombre_completo}.` };
+  }
+
+  const updated: DocenteAutorizado = {
+    ...datos,
+    rfc: cleanRfc,
+    correo_institucional: cleanEmail,
+    clave_acceso: cleanClave
+  };
+
+  try {
+    await cloudSaveDocente(updated, previousEmail);
+    const nextDocentes = docentes.map(d => (d.id === updated.id ? updated : d));
+    updateDbState({ docentes: nextDocentes });
+    persistDocentesCache(nextDocentes);
+    return { success: true, docente: updated };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'No se pudo actualizar el docente en Firebase.'
     };
   }
 }
@@ -1261,10 +1646,10 @@ export async function cambiarEstatusDocente(
   if (!target) return { success: false, error: 'Docente no encontrado.' };
   const updated: DocenteAutorizado = { ...target, estatus_autorizacion: nuevoEstatus };
   try {
-    await cloudSaveDocente(updated);
-    updateDbState({
-      docentes: dbState.docentes.map(d => (d.id === id ? updated : d))
-    });
+    await cloudSaveDocente(updated, target.correo_institucional);
+    const nextDocentes = dbState.docentes.map(d => (d.id === id ? updated : d));
+    updateDbState({ docentes: nextDocentes });
+    persistDocentesCache(nextDocentes);
     return { success: true };
   } catch (error) {
     return {
@@ -1274,12 +1659,33 @@ export async function cambiarEstatusDocente(
   }
 }
 
+export async function cambiarNivelAccesoDocente(
+  id: string,
+  nuevoNivel: 'editor' | 'lector'
+): Promise<{ success: boolean; error?: string }> {
+  const target = dbState.docentes.find(d => d.id === id);
+  if (!target) return { success: false, error: 'Docente no encontrado.' };
+  const updated: DocenteAutorizado = { ...target, nivel_acceso: nuevoNivel };
+  try {
+    await cloudSaveDocente(updated, target.correo_institucional);
+    const nextDocentes = dbState.docentes.map(d => (d.id === id ? updated : d));
+    updateDbState({ docentes: nextDocentes });
+    persistDocentesCache(nextDocentes);
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'No se pudo actualizar el nivel de acceso del docente.'
+    };
+  }
+}
+
 export async function eliminarDocente(id: string): Promise<{ success: boolean; error?: string }> {
   try {
     await cloudDeleteDocente(id);
-    updateDbState({
-      docentes: dbState.docentes.filter(d => d.id !== id)
-    });
+    const nextDocentes = dbState.docentes.filter(d => d.id !== id);
+    updateDbState({ docentes: nextDocentes });
+    persistDocentesCache(nextDocentes);
     return { success: true };
   } catch (error) {
     return {

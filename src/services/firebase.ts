@@ -32,6 +32,7 @@ import {
   EvaluacionVocacional,
   ProgresoVirtual,
   DocenteAutorizado,
+  DocenteAcceso,
   FichaAcademiaReq,
   OficioCircular,
   AccesoGoogle,
@@ -47,17 +48,12 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 function createFirestoreInstance(): Firestore {
   const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
   try {
-    // 100% online memoryLocalCache (no IndexedDB offline persistence)
+    // 100% online memoryLocalCache with experimentalForceLongPolling to avoid 10s WebSocket timeouts in preview/proxy environments
     return initializeFirestore(
       app,
       {
         localCache: memoryLocalCache(),
-        ...(typeof window !== 'undefined'
-          ? {
-              experimentalAutoDetectLongPolling: true,
-              experimentalLongPollingOptions: { timeoutSeconds: 8 }
-            }
-          : {}),
+        experimentalForceLongPolling: true,
         ignoreUndefinedProperties: true
       },
       databaseId
@@ -84,6 +80,7 @@ export const COLLECTIONS = {
   ESTUDIANTES: 'estudiantes',
   CURP_REGISTRY: 'curp_registry',
   DOCENTES: 'docentes',
+  DOCENTE_ACCESOS: 'docente_accesos',
   EVALUACIONES: 'evaluaciones',
   PROGRESOS: 'progresos',
   FICHAS: 'fichas_academia',
@@ -146,40 +143,11 @@ let inFlightConnectionTest: Promise<boolean> | null = null;
 let lastConnectionResult: { ok: boolean; checkedAt: number } | null = null;
 const CONNECTION_CACHE_MS = 10000;
 
-async function probeFirestoreRestReachability(): Promise<'reachable' | 'invalid_config' | 'unreachable'> {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    return 'unreachable';
-  }
-  if (!firebaseConfig.projectId || !firebaseConfig.apiKey) {
-    return 'invalid_config';
-  }
-  if (typeof fetch !== 'function') {
-    return 'reachable';
-  }
-
-  const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
-  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${encodeURIComponent(databaseId)}/documents/test/connection?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      cache: 'no-store',
-      signal: controller.signal
-    });
-    if (response.status === 400 || response.status === 404) {
-      return 'invalid_config';
-    }
-    return 'reachable';
-  } catch {
-    return 'unreachable';
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function testConnection(forceRefresh = false): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    lastConnectionResult = { ok: false, checkedAt: Date.now() };
+    return false;
+  }
   if (!forceRefresh && lastConnectionResult && Date.now() - lastConnectionResult.checkedAt < CONNECTION_CACHE_MS) {
     return lastConnectionResult.ok;
   }
@@ -188,26 +156,23 @@ export async function testConnection(forceRefresh = false): Promise<boolean> {
   }
 
   inFlightConnectionTest = (async () => {
-    const restState = await probeFirestoreRestReachability();
-    if (restState === 'invalid_config') {
-      console.error('Please check your Firebase configuration.');
-      lastConnectionResult = { ok: false, checkedAt: Date.now() };
-      return false;
-    }
-    if (restState === 'unreachable') {
-      lastConnectionResult = { ok: false, checkedAt: Date.now() };
-      return false;
-    }
-
     try {
-      await getDocFromServer(doc(db, 'test', 'connection'));
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('the client is offline - connection timed out')), 8000)
+      );
+      await Promise.race([
+        getDocFromServer(doc(db, 'test', 'connection')),
+        timeoutPromise
+      ]);
       lastConnectionResult = { ok: true, checkedAt: Date.now() };
       return true;
     } catch (error) {
       if (error instanceof Error && error.message.includes('the client is offline')) {
+        console.error('Please check your Firebase configuration.');
         lastConnectionResult = { ok: false, checkedAt: Date.now() };
         return false;
       }
+      // Reaching the server and receiving 'permission-denied' or 'not-found' means the backend is reachable!
       lastConnectionResult = { ok: true, checkedAt: Date.now() };
       return true;
     }
@@ -261,6 +226,29 @@ export function onFirebaseAuthChange(callback: (user: User | null) => void): () 
 export async function checkIsFirebaseAdmin(user: User | null = auth.currentUser): Promise<boolean> {
   if (!user || !user.emailVerified || !user.email) return false;
   return user.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+}
+
+export const EMAIL_DOC_ID_REGEX = /^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/;
+
+export function normalizeDocenteEmail(email?: string | null): string {
+  return (email || '').trim().toLowerCase();
+}
+
+export function isValidEmailDocIdClient(email: string): boolean {
+  return email.length >= 3 && email.length <= 200 && EMAIL_DOC_ID_REGEX.test(email);
+}
+
+export async function checkDocenteAcceso(user: User | null = auth.currentUser): Promise<DocenteAcceso | null> {
+  if (!user || !user.emailVerified || !user.email) return null;
+  const cleanEmail = normalizeDocenteEmail(user.email);
+  if (!isValidEmailDocIdClient(cleanEmail)) return null;
+  try {
+    const snap = await getDocFromServer(doc(db, COLLECTIONS.DOCENTE_ACCESOS, cleanEmail));
+    if (!snap.exists()) return null;
+    return snap.data() as DocenteAcceso;
+  } catch {
+    return null;
+  }
 }
 
 export async function requireOnlineFirebase(requireAdmin = false): Promise<{ user: User; isAdmin: boolean }> {
@@ -545,23 +533,73 @@ export async function cloudSaveProgreso(progreso: ProgresoVirtual): Promise<void
 // Docentes Autorizados (Admin Only)
 // ---------------------------------------------------------------------
 
-export async function cloudSaveDocente(docente: DocenteAutorizado): Promise<void> {
+export async function cloudSaveDocente(docente: DocenteAutorizado, previousEmail?: string): Promise<void> {
   await requireOnlineFirebase(true);
   const cleanId = (docente?.id || '').trim();
   if (!cleanId || cleanId.includes('/')) {
     throw new Error('El identificador del docente no es válido.');
   }
+  const cleanEmail = normalizeDocenteEmail(docente.correo_institucional);
+  if (!isValidEmailDocIdClient(cleanEmail)) {
+    throw new Error('Ingresa un correo electrónico válido (Gmail o institucional) para el docente.');
+  }
+
   const path = `${COLLECTIONS.DOCENTES}/${cleanId}`;
   const docRef = doc(db, COLLECTIONS.DOCENTES, cleanId);
+  const accesoRef = doc(db, COLLECTIONS.DOCENTE_ACCESOS, cleanEmail);
   let opType: OperationType = OperationType.WRITE;
+
   try {
-    const prepared = await prepareWritePayload(
-      docRef,
-      { ...docente, id: cleanId } as unknown as Record<string, unknown>,
-      false
-    );
-    opType = prepared.opType;
-    await setDoc(docRef, prepared.payload);
+    const [docSnap, accesoSnap] = await Promise.all([
+      getDocFromServer(docRef),
+      getDocFromServer(accesoRef)
+    ]);
+
+    const existingDocente = docSnap.exists() ? (docSnap.data() as Partial<DocenteAutorizado> & { createdAt?: unknown }) : null;
+    const oldEmail = normalizeDocenteEmail(previousEmail || existingDocente?.correo_institucional);
+    opType = existingDocente ? OperationType.UPDATE : OperationType.CREATE;
+
+    if (accesoSnap.exists() && accesoSnap.data()?.docente_id !== cleanId) {
+      await deleteDoc(accesoRef);
+    }
+
+    const sanitizedDocente = sanitizeForFirestore({
+      ...docente,
+      id: cleanId,
+      correo_institucional: cleanEmail
+    } as unknown as Record<string, unknown>);
+
+    const docentePayload: Record<string, unknown> = {
+      ...sanitizedDocente,
+      createdAt: existingDocente?.createdAt ?? serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+
+    const existingAcceso =
+      accesoSnap.exists() && accesoSnap.data()?.docente_id === cleanId
+        ? (accesoSnap.data() as Record<string, unknown>)
+        : null;
+
+    const accesoPayload: Record<string, unknown> = {
+      email: cleanEmail,
+      docente_id: cleanId,
+      nombre_completo: docente.nombre_completo.trim().slice(0, 150),
+      academia: docente.academia,
+      rol: docente.rol,
+      nivel_acceso: docente.nivel_acceso || 'lector',
+      clave_acceso: docente.clave_acceso,
+      estatus_autorizacion: docente.estatus_autorizacion,
+      createdAt: existingAcceso?.createdAt ?? serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+
+    const batch = writeBatch(db);
+    batch.set(docRef, docentePayload);
+    batch.set(accesoRef, accesoPayload);
+    if (oldEmail && oldEmail !== cleanEmail && isValidEmailDocIdClient(oldEmail)) {
+      batch.delete(doc(db, COLLECTIONS.DOCENTE_ACCESOS, oldEmail));
+    }
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, opType, path);
   }
@@ -574,11 +612,193 @@ export async function cloudDeleteDocente(id: string): Promise<void> {
     throw new Error('El identificador del docente no es válido.');
   }
   const path = `${COLLECTIONS.DOCENTES}/${cleanId}`;
+  const docRef = doc(db, COLLECTIONS.DOCENTES, cleanId);
   try {
-    await deleteDoc(doc(db, COLLECTIONS.DOCENTES, cleanId));
+    const snap = await getDocFromServer(docRef);
+    const email = snap.exists() ? normalizeDocenteEmail((snap.data() as Partial<DocenteAutorizado>).correo_institucional) : '';
+    const batch = writeBatch(db);
+    batch.delete(docRef);
+    if (email && isValidEmailDocIdClient(email)) {
+      batch.delete(doc(db, COLLECTIONS.DOCENTE_ACCESOS, email));
+    }
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+export async function cloudSyncMissingDocenteAccesos(): Promise<void> {
+  const { isAdmin } = await requireOnlineFirebase(false);
+  if (!isAdmin) return;
+  try {
+    const [docSnap, accSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.DOCENTES)),
+      getDocs(collection(db, COLLECTIONS.DOCENTE_ACCESOS))
+    ]);
+    const existingAccesos = new Map<string, Record<string, unknown>>();
+    accSnap.docs.forEach(d => existingAccesos.set(d.id, d.data() as Record<string, unknown>));
+
+    const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+    for (const d of docSnap.docs) {
+      const docente = d.data() as DocenteAutorizado;
+      const cleanEmail = normalizeDocenteEmail(docente.correo_institucional);
+      if (!isValidEmailDocIdClient(cleanEmail)) continue;
+      const existingAcc = existingAccesos.get(cleanEmail);
+      const needsSync =
+        !existingAcc ||
+        existingAcc.docente_id !== docente.id ||
+        existingAcc.estatus_autorizacion !== docente.estatus_autorizacion ||
+        existingAcc.nombre_completo !== docente.nombre_completo ||
+        existingAcc.academia !== docente.academia ||
+        existingAcc.rol !== docente.rol ||
+        existingAcc.nivel_acceso !== (docente.nivel_acceso || 'lector') ||
+        existingAcc.clave_acceso !== (docente.clave_acceso || '');
+
+      if (!needsSync) continue;
+
+      if (existingAcc && existingAcc.docente_id !== docente.id) {
+        await deleteDoc(doc(db, COLLECTIONS.DOCENTE_ACCESOS, cleanEmail));
+      }
+
+      const createdAtVal =
+        existingAcc && existingAcc.docente_id === docente.id && existingAcc.createdAt
+          ? existingAcc.createdAt
+          : serverTimestamp();
+
+      const accPayload: Record<string, unknown> = {
+        email: cleanEmail,
+        docente_id: docente.id,
+        nombre_completo: docente.nombre_completo.trim().slice(0, 150),
+        academia: docente.academia,
+        rol: docente.rol,
+        nivel_acceso: docente.nivel_acceso || 'lector',
+        estatus_autorizacion: docente.estatus_autorizacion,
+        createdAt: createdAtVal,
+        updatedAt: serverTimestamp()
+      };
+      if (docente.clave_acceso && docente.clave_acceso.trim().length >= 4) {
+        accPayload.clave_acceso = docente.clave_acceso.trim();
+      }
+
+      ops.push(b =>
+        b.set(doc(db, COLLECTIONS.DOCENTE_ACCESOS, cleanEmail), accPayload)
+      );
+    }
+
+    if (ops.length > 0) {
+      await commitOperationsInChunks(ops);
+    }
+  } catch (err) {
+    console.warn('No se pudo sincronizar docente_accesos:', err);
+  }
+}
+
+export async function cloudFetchDocentes(): Promise<DocenteAutorizado[]> {
+  try {
+    const snap = await getDocs(collection(db, COLLECTIONS.DOCENTES));
+    return snap.docs.map(d => d.data() as DocenteAutorizado);
+  } catch (err) {
+    console.warn('No se pudo cargar docentes de Firebase:', err);
+    return [];
+  }
+}
+
+export async function cloudFetchFichas(): Promise<Record<string, FichaAcademiaReq>> {
+  try {
+    const snap = await getDocs(collection(db, COLLECTIONS.FICHAS));
+    const dict: Record<string, FichaAcademiaReq> = {};
+    snap.docs.forEach(d => {
+      const data = d.data() as FichaAcademiaReq;
+      const id = data.especialidad_id || d.id;
+      if (id) dict[id] = data;
+    });
+    return dict;
+  } catch {
+    return {};
+  }
+}
+
+export async function cloudFetchOficio(): Promise<OficioCircular | null> {
+  try {
+    const snap = await getDoc(doc(db, COLLECTIONS.CONFIGURACION, CONFIG_OFICIO_ID));
+    return snap.exists() ? (snap.data() as OficioCircular) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function subscribePublicCollections(callbacks: {
+  onDocentes?: (docentes: DocenteAutorizado[]) => void;
+  onFichas?: (fichas: Record<string, FichaAcademiaReq>) => void;
+  onOficio?: (oficio: OficioCircular | null) => void;
+}): () => void {
+  const unsubs: Array<() => void> = [];
+
+  try {
+    const unsubDoc = onSnapshot(
+      collection(db, COLLECTIONS.DOCENTES),
+      snap => {
+        const list = snap.docs.map(d => {
+          const data = d.data() as DocenteAutorizado;
+          return {
+            ...data,
+            id: data.id || d.id
+          };
+        });
+        callbacks.onDocentes?.(list);
+      },
+      err => {
+        console.warn('Public onSnapshot docentes warn:', err);
+      }
+    );
+    unsubs.push(unsubDoc);
+  } catch (err) {
+    console.warn('subscribePublicCollections docentes error:', err);
+  }
+
+  try {
+    const unsubFichas = onSnapshot(
+      collection(db, COLLECTIONS.FICHAS),
+      snap => {
+        const dict: Record<string, FichaAcademiaReq> = {};
+        snap.docs.forEach(d => {
+          const data = d.data() as FichaAcademiaReq;
+          const id = data.especialidad_id || d.id;
+          if (id) dict[id] = data;
+        });
+        callbacks.onFichas?.(dict);
+      },
+      err => {
+        console.warn('Public onSnapshot fichas warn:', err);
+      }
+    );
+    unsubs.push(unsubFichas);
+  } catch (err) {
+    console.warn('subscribePublicCollections fichas error:', err);
+  }
+
+  try {
+    const unsubOficio = onSnapshot(
+      doc(db, COLLECTIONS.CONFIGURACION, CONFIG_OFICIO_ID),
+      snap => {
+        callbacks.onOficio?.(snap.exists() ? (snap.data() as OficioCircular) : null);
+      },
+      err => {
+        console.warn('Public onSnapshot oficio warn:', err);
+      }
+    );
+    unsubs.push(unsubOficio);
+  } catch (err) {
+    console.warn('subscribePublicCollections oficio error:', err);
+  }
+
+  return () => {
+    unsubs.forEach(u => {
+      try {
+        u();
+      } catch {}
+    });
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -717,8 +937,13 @@ export async function cloudWipeEstudiantes(): Promise<void> {
 export async function cloudWipeDocentes(): Promise<void> {
   await requireOnlineFirebase(true);
   try {
-    const docSnap = await getDocs(collection(db, COLLECTIONS.DOCENTES));
-    const ops = docSnap.docs.map(d => (b: ReturnType<typeof writeBatch>) => b.delete(d.ref));
+    const [docSnap, accSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.DOCENTES)),
+      getDocs(collection(db, COLLECTIONS.DOCENTE_ACCESOS))
+    ]);
+    const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+    docSnap.docs.forEach(d => ops.push(b => b.delete(d.ref)));
+    accSnap.docs.forEach(d => ops.push(b => b.delete(d.ref)));
     await commitOperationsInChunks(ops);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, COLLECTIONS.DOCENTES);
@@ -804,13 +1029,35 @@ export async function cloudSeedDocentesList(docentes: DocenteAutorizado[]): Prom
   await requireOnlineFirebase(true);
   await cloudWipeDocentes();
   try {
-    const ops = docentes.map(d => (b: ReturnType<typeof writeBatch>) =>
-      b.set(doc(db, COLLECTIONS.DOCENTES, d.id), {
-        ...sanitizeForFirestore(d as unknown as Record<string, unknown>),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      })
-    );
+    const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+    const seenEmails = new Set<string>();
+    for (const d of docentes) {
+      const cleanEmail = normalizeDocenteEmail(d.correo_institucional);
+      ops.push(b =>
+        b.set(doc(db, COLLECTIONS.DOCENTES, d.id), {
+          ...sanitizeForFirestore({ ...d, correo_institucional: cleanEmail } as unknown as Record<string, unknown>),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        })
+      );
+      if (isValidEmailDocIdClient(cleanEmail) && !seenEmails.has(cleanEmail)) {
+        seenEmails.add(cleanEmail);
+        ops.push(b =>
+          b.set(doc(db, COLLECTIONS.DOCENTE_ACCESOS, cleanEmail), {
+            email: cleanEmail,
+            docente_id: d.id,
+            nombre_completo: d.nombre_completo.trim().slice(0, 150),
+            academia: d.academia,
+            rol: d.rol,
+            nivel_acceso: d.nivel_acceso || 'lector',
+            clave_acceso: d.clave_acceso,
+            estatus_autorizacion: d.estatus_autorizacion,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          })
+        );
+      }
+    }
     await commitOperationsInChunks(ops);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, COLLECTIONS.DOCENTES);
@@ -933,12 +1180,14 @@ export interface AppDbCallbacks {
   onOficio: (oficio: OficioCircular | null) => void;
   onDocentes: (list: DocenteAutorizado[]) => void;
   onAccesosGoogle: (list: AccesoGoogle[]) => void;
+  onDocenteAcceso?: (acceso: DocenteAcceso | null) => void;
   onError: (err: Error) => void;
 }
 
 export function subscribeAppDatabase(
   user: User,
   isAdmin: boolean,
+  hasDirectionAccess: boolean,
   callbacks: AppDbCallbacks
 ): () => void {
   const unsubs: Array<() => void> = [];
@@ -951,7 +1200,9 @@ export function subscribeAppDatabase(
     }
   };
 
-  const estQuery = isAdmin
+  const canReadAllStudents = isAdmin || hasDirectionAccess;
+
+  const estQuery = canReadAllStudents
     ? collection(db, COLLECTIONS.ESTUDIANTES)
     : query(collection(db, COLLECTIONS.ESTUDIANTES), where('ownerUid', '==', user.uid));
 
@@ -973,7 +1224,7 @@ export function subscribeAppDatabase(
     )
   );
 
-  const evalQuery = isAdmin
+  const evalQuery = canReadAllStudents
     ? collection(db, COLLECTIONS.EVALUACIONES)
     : query(collection(db, COLLECTIONS.EVALUACIONES), where('ownerUid', '==', user.uid));
 
@@ -997,7 +1248,7 @@ export function subscribeAppDatabase(
     )
   );
 
-  const progQuery = isAdmin
+  const progQuery = canReadAllStudents
     ? collection(db, COLLECTIONS.PROGRESOS)
     : query(collection(db, COLLECTIONS.PROGRESOS), where('ownerUid', '==', user.uid));
 
@@ -1049,6 +1300,21 @@ export function subscribeAppDatabase(
       err => handleListenerErr(`${COLLECTIONS.CONFIGURACION}/${CONFIG_OFICIO_ID}`, err)
     )
   );
+
+  const cleanUserEmail = normalizeDocenteEmail(user.email);
+  if (!isAdmin && user.emailVerified && isValidEmailDocIdClient(cleanUserEmail) && callbacks.onDocenteAcceso) {
+    unsubs.push(
+      onSnapshot(
+        doc(db, COLLECTIONS.DOCENTE_ACCESOS, cleanUserEmail),
+        snap => {
+          callbacks.onDocenteAcceso?.(snap.exists() ? (snap.data() as DocenteAcceso) : null);
+        },
+        () => {
+          callbacks.onDocenteAcceso?.(null);
+        }
+      )
+    );
+  }
 
   if (isAdmin) {
     unsubs.push(

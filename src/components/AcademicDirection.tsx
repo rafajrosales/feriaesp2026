@@ -1,27 +1,35 @@
-import React, { useState, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useSyncExternalStore } from 'react';
 import { 
   getProgresoVirtual, 
   saveFichaAcademia,
   saveOficioCircular,
   registrarNuevoDocente,
+  actualizarDocente,
   cambiarEstatusDocente,
+  cambiarNivelAccesoDocente,
   eliminarDocente,
   sincronizarBaseDeDatosCETis7,
   subscribeDbStore,
-  getDbStoreSnapshot
+  getDbStoreSnapshot,
+  getSesionActiva
 } from '../services/storage';
 import {
   SpecialtyId,
   FichaAcademiaReq,
   OficioCircular,
   DocenteAutorizado,
+  DocenteAcceso,
   Estudiante,
   ItemGaleriaAlumno,
   ReactivoExamen,
   EvaluacionVocacional,
   GRUPOS_PRIMER_SEMESTRE
 } from '../types';
-import { BOOTSTRAPPED_ADMIN_EMAIL } from '../services/firebase';
+import {
+  BOOTSTRAPPED_ADMIN_EMAIL,
+  isValidEmailDocIdClient,
+  normalizeDocenteEmail
+} from '../services/firebase';
 import { parseEmbedMediaUrl } from '../utils/media';
 import { FICHAS_ACADEMIA_DEFAULT } from '../data/mockData';
 import { deriveVocationalMetrics } from '../utils/vocationalMetrics';
@@ -59,11 +67,47 @@ import {
 } from 'lucide-react';
 import { MatriculaDashboard } from './MatriculaDashboard';
 
-export const AcademicDirection: React.FC = () => {
+interface AcademicDirectionProps {
+  isAdmin?: boolean;
+  docenteAcceso?: DocenteAcceso | null;
+}
+
+export const AcademicDirection: React.FC<AcademicDirectionProps> = ({
+  isAdmin: isAdminProp,
+  docenteAcceso: docenteAccesoProp
+}) => {
   const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
+  const sesionActiva = getSesionActiva();
+  const effectiveIsAdmin = isAdminProp ?? dbSnapshot.isAdmin;
+  const docenteDeSesion = sesionActiva?.docenteId
+    ? dbSnapshot.docentes.find(d => d.id === sesionActiva.docenteId)
+    : (sesionActiva?.tipo === 'docente'
+        ? dbSnapshot.docentes.find(d => sesionActiva.nombre?.includes(d.nombre_completo))
+        : null);
+
+  const effectiveDocenteAcceso: DocenteAcceso | null = docenteAccesoProp ?? dbSnapshot.docenteAcceso ?? (
+    docenteDeSesion ? {
+      email: docenteDeSesion.correo_institucional,
+      docente_id: docenteDeSesion.id,
+      nombre_completo: docenteDeSesion.nombre_completo,
+      academia: docenteDeSesion.academia,
+      rol: docenteDeSesion.rol,
+      nivel_acceso: docenteDeSesion.nivel_acceso,
+      clave_acceso: docenteDeSesion.clave_acceso,
+      estatus_autorizacion: docenteDeSesion.estatus_autorizacion
+    } : null
+  );
+
+  const effectiveIsEditor = effectiveIsAdmin || (effectiveDocenteAcceso?.nivel_acceso === 'editor') || (sesionActiva?.tipo === 'docente' && sesionActiva.esEditor === true);
 
   const [subTab, setSubTab] = useState<'tablero' | 'ficha' | 'circular' | 'padron' | 'docentes' | 'accesos'>('tablero');
   const [selectedAcademia, setSelectedAcademia] = useState<SpecialtyId>('programacion');
+
+  useEffect(() => {
+    if (!effectiveIsAdmin && (subTab === 'docentes' || subTab === 'accesos')) {
+      setSubTab('tablero');
+    }
+  }, [effectiveIsAdmin, subTab]);
   
   // Drafts layered on top of reactive Firestore store
   const [fichasDrafts, setFichasDrafts] = useState<Partial<Record<SpecialtyId, FichaAcademiaReq>>>({});
@@ -95,14 +139,19 @@ export const AcademicDirection: React.FC = () => {
   const [docenteClaveVisibleId, setDocenteClaveVisibleId] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
-  // Form state for new docente registration
+  // Form state for new / edit docente registration
+  const [editingDocenteId, setEditingDocenteId] = useState<string | null>(null);
+  const [editingPreviousEmail, setEditingPreviousEmail] = useState<string | undefined>(undefined);
+  const [editingFechaAlta, setEditingFechaAlta] = useState<string>('');
+  const [editingRegistradoPor, setEditingRegistradoPor] = useState<string>('Administrador DGETI');
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoRfc, setNuevoRfc] = useState('');
   const [nuevoCorreo, setNuevoCorreo] = useState('');
   const [nuevaAcademia, setNuevaAcademia] = useState<SpecialtyId | 'general'>('programacion');
   const [nuevoRol, setNuevoRol] = useState<DocenteAutorizado['rol']>('Profesor Titular');
   const [nuevaClave, setNuevaClave] = useState('');
-  const [nuevoEstatus, setNuevoEstatus] = useState<'AUTORIZADO' | 'PENDIENTE'>('AUTORIZADO');
+  const [nuevoEstatus, setNuevoEstatus] = useState<'AUTORIZADO' | 'PENDIENTE' | 'REVOCADO'>('AUTORIZADO');
+  const [nuevoNivelAcceso, setNuevoNivelAcceso] = useState<'editor' | 'lector'>('lector');
   const [docenteFormError, setDocenteFormError] = useState<string | null>(null);
   const [docenteSuccessNotice, setDocenteSuccessNotice] = useState<string | null>(null);
 
@@ -290,6 +339,40 @@ export const AcademicDirection: React.FC = () => {
     showSaved('¡Padrones y registros actualizados en la base única de Firebase!');
   };
 
+  const handleAbrirNuevoDocente = () => {
+    setEditingDocenteId(null);
+    setEditingPreviousEmail(undefined);
+    setEditingFechaAlta('');
+    setEditingRegistradoPor('Administrador DGETI');
+    setNuevoNombre('');
+    setNuevoRfc('');
+    setNuevoCorreo('');
+    setNuevaAcademia('programacion');
+    setNuevoRol('Profesor Titular');
+    setNuevaClave('');
+    setNuevoEstatus('AUTORIZADO');
+    setNuevoNivelAcceso('lector');
+    setDocenteFormError(null);
+    setMostrarModalAltaDocente(true);
+  };
+
+  const handleAbrirEditarDocente = (docItem: DocenteAutorizado) => {
+    setEditingDocenteId(docItem.id);
+    setEditingPreviousEmail(docItem.correo_institucional);
+    setEditingFechaAlta(docItem.fecha_alta);
+    setEditingRegistradoPor(docItem.registrado_por || 'Administrador DGETI');
+    setNuevoNombre(docItem.nombre_completo);
+    setNuevoRfc(docItem.rfc);
+    setNuevoCorreo(docItem.correo_institucional);
+    setNuevaAcademia(docItem.academia);
+    setNuevoRol(docItem.rol);
+    setNuevaClave(docItem.clave_acceso);
+    setNuevoEstatus(docItem.estatus_autorizacion);
+    setNuevoNivelAcceso(docItem.nivel_acceso || 'lector');
+    setDocenteFormError(null);
+    setMostrarModalAltaDocente(true);
+  };
+
   const handleRegistrarDocenteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setDocenteFormError(null);
@@ -304,32 +387,60 @@ export const AcademicDirection: React.FC = () => {
       return;
     }
 
+    const cleanCorreo = normalizeDocenteEmail(nuevoCorreo);
+    if (!isValidEmailDocIdClient(cleanCorreo)) {
+      setDocenteFormError('Ingresa un correo electrónico válido (Google/Gmail o institucional) para que el docente pueda acceder.');
+      return;
+    }
+
     if (!nuevaClave.trim() || nuevaClave.trim().length < 4) {
       setDocenteFormError('El folio administrativo interno debe tener al menos 4 caracteres.');
       return;
     }
 
-    const cleanCorreo = nuevoCorreo.trim() || `${nuevoNombre.toLowerCase().split(' ')[0]}.${nuevoRfc.slice(-4).toLowerCase()}@cetis7.edu.mx`;
-
     setSavingAction(true);
-    const result = await registrarNuevoDocente({
-      nombre_completo: nuevoNombre.trim(),
-      rfc: nuevoRfc.trim().toUpperCase(),
-      correo_institucional: cleanCorreo,
-      academia: nuevaAcademia,
-      rol: nuevoRol,
-      clave_acceso: nuevaClave.trim().toUpperCase(),
-      estatus_autorizacion: nuevoEstatus,
-      registrado_por: 'Administrador DGETI'
-    });
+    const result = editingDocenteId
+      ? await actualizarDocente(
+          {
+            id: editingDocenteId,
+            nombre_completo: nuevoNombre.trim(),
+            rfc: nuevoRfc.trim().toUpperCase(),
+            correo_institucional: cleanCorreo,
+            academia: nuevaAcademia,
+            rol: nuevoRol,
+            nivel_acceso: nuevoNivelAcceso,
+            clave_acceso: nuevaClave.trim().toUpperCase(),
+            estatus_autorizacion: nuevoEstatus,
+            fecha_alta: editingFechaAlta || new Date().toISOString(),
+            registrado_por: editingRegistradoPor
+          },
+          editingPreviousEmail
+        )
+      : await registrarNuevoDocente({
+          nombre_completo: nuevoNombre.trim(),
+          rfc: nuevoRfc.trim().toUpperCase(),
+          correo_institucional: cleanCorreo,
+          academia: nuevaAcademia,
+          rol: nuevoRol,
+          nivel_acceso: nuevoNivelAcceso,
+          clave_acceso: nuevaClave.trim().toUpperCase(),
+          estatus_autorizacion: nuevoEstatus,
+          registrado_por: 'Administrador DGETI'
+        });
     setSavingAction(false);
 
     if (!result.success) {
-      setDocenteFormError(result.error || 'Ocurrió un error al registrar el docente en Firebase.');
+      setDocenteFormError(result.error || 'Ocurrió un error al guardar el docente en Firebase.');
       return;
     }
 
-    setDocenteSuccessNotice(`¡Profesor ${result.docente?.nombre_completo} guardado en Firebase como ${result.docente?.estatus_autorizacion}!`);
+    setDocenteSuccessNotice(
+      editingDocenteId
+        ? `¡Profesor ${result.docente?.nombre_completo} actualizado en Firebase (${result.docente?.correo_institucional})!`
+        : `¡Profesor ${result.docente?.nombre_completo} guardado en Firebase como ${result.docente?.estatus_autorizacion}!`
+    );
+    setEditingDocenteId(null);
+    setEditingPreviousEmail(undefined);
     setNuevoNombre('');
     setNuevoRfc('');
     setNuevoCorreo('');
@@ -348,6 +459,17 @@ export const AcademicDirection: React.FC = () => {
       showError(res.error || 'No se pudo actualizar el estatus del docente en Firebase.');
     } else {
       showSaved(`Estatus actualizado a ${nuevoEst}.`);
+    }
+  };
+
+  const handleCambiarNivelAccesoDocenteClick = async (id: string, nuevoNiv: 'editor' | 'lector') => {
+    setSavingAction(true);
+    const res = await cambiarNivelAccesoDocente(id, nuevoNiv);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudo actualizar el nivel de acceso del docente.');
+    } else {
+      showSaved(`Nivel de acceso actualizado a ${nuevoNiv === 'editor' ? 'Editor (Modifica)' : 'Lector (Solo Ver)'}.`);
     }
   };
 
@@ -552,25 +674,29 @@ export const AcademicDirection: React.FC = () => {
             <h3 className="text-lg font-bold text-stone-900">Coordinación Técnico-Pedagógica DGETI · Ciclo 2026</h3>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Botón para Respaldar Alumnos y Docentes */}
-            <button
-              onClick={handleOpenModalRespaldo}
-              title="Descargar copia de seguridad en JSON de alumnos y profesores"
-              className="px-3 py-1.5 text-xs font-bold text-[#721B32] bg-[#721B32]/10 hover:bg-[#721B32]/20 border border-[#721B32]/30 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-            >
-              <Download className="w-3.5 h-3.5 text-[#721B32]" />
-              <span>Respaldar Datos (.JSON)</span>
-            </button>
+            {effectiveIsAdmin && (
+              <>
+                {/* Botón para Respaldar Alumnos y Docentes */}
+                <button
+                  onClick={handleOpenModalRespaldo}
+                  title="Descargar copia de seguridad en JSON de alumnos y profesores"
+                  className="px-3 py-1.5 text-xs font-bold text-[#721B32] bg-[#721B32]/10 hover:bg-[#721B32]/20 border border-[#721B32]/30 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#721B32]" />
+                  <span>Respaldar Datos (.JSON)</span>
+                </button>
 
-            {/* Botón para Reiniciar Alumnos y Docentes */}
-            <button
-              onClick={handleOpenModalReinicio}
-              title="Reiniciar alumnos y/o docentes a valores oficiales o en blanco"
-              className="px-3 py-1.5 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-300 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-red-600" />
-              <span>Reiniciar Alumnos y Docentes</span>
-            </button>
+                {/* Botón para Reiniciar Alumnos y Docentes */}
+                <button
+                  onClick={handleOpenModalReinicio}
+                  title="Reiniciar alumnos y/o docentes a valores oficiales o en blanco"
+                  className="px-3 py-1.5 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-300 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-red-600" />
+                  <span>Reiniciar Alumnos y Docentes</span>
+                </button>
+              </>
+            )}
 
             <button
               onClick={handleExportCSV}
@@ -620,107 +746,171 @@ export const AcademicDirection: React.FC = () => {
             <Users className="w-3.5 h-3.5" />
             4. Padrón Estudiantil & Validaciones
           </button>
-          <button
-            onClick={() => setSubTab('docentes')}
-            className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap ${
-              subTab === 'docentes' ? 'bg-[#721B32] text-white font-semibold' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-            }`}
-          >
-            <UserCheck className="w-3.5 h-3.5" />
-            5. Padrón Docentes Autorizados ({docentes.filter(d => d.estatus_autorizacion === 'AUTORIZADO').length})
-          </button>
-          <button
-            onClick={() => setSubTab('accesos')}
-            className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap ${
-              subTab === 'accesos' ? 'bg-[#721B32] text-white font-semibold' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-            }`}
-          >
-            <Globe className="w-3.5 h-3.5" />
-            6. Accesos Google ({dbSnapshot.accesosGoogle.length})
-          </button>
+          {effectiveIsAdmin && (
+            <>
+              <button
+                onClick={() => setSubTab('docentes')}
+                className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  subTab === 'docentes' ? 'bg-[#721B32] text-white font-semibold' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                5. Padrón Docentes Autorizados ({docentes.filter(d => d.estatus_autorizacion === 'AUTORIZADO').length})
+              </button>
+              <button
+                onClick={() => setSubTab('accesos')}
+                className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  subTab === 'accesos' ? 'bg-[#721B32] text-white font-semibold' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                6. Accesos Google ({dbSnapshot.accesosGoogle.length})
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Docente Quick Guide Banner: Where and How to Edit Content */}
-      <div className="no-print bg-gradient-to-r from-amber-50 to-stone-50 border-2 border-amber-300 rounded-2xl p-4 sm:p-5 shadow-2xs space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-200 pb-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-200 text-amber-950 flex items-center justify-center font-bold shrink-0 border border-amber-400 shadow-2xs">
-              <Sparkles className="w-5 h-5 text-amber-900" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-amber-800 tracking-wider">
-                <span>Modo Docente Activo</span>
-                <span>•</span>
-                <span>Centro de Configuración y Edición</span>
+      {/* Role Banner: Full Admin vs. Docente Read-Only Consultation */}
+      {effectiveIsAdmin ? (
+        <div className="no-print bg-gradient-to-r from-amber-50 to-stone-50 border-2 border-amber-300 rounded-2xl p-4 sm:p-5 shadow-2xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-200 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-200 text-amber-950 flex items-center justify-center font-bold shrink-0 border border-amber-400 shadow-2xs">
+                <Sparkles className="w-5 h-5 text-amber-900" />
               </div>
-              <h3 className="text-sm sm:text-base font-bold text-amber-950">
-                ¿Dónde y cómo modificar Cuestionarios, Test, Videos y Circulares?
+              <div>
+                <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-amber-800 tracking-wider">
+                  <span>Administrador Único Activo ({BOOTSTRAPPED_ADMIN_EMAIL})</span>
+                  <span>•</span>
+                  <span>Centro de Configuración y Edición</span>
+                </div>
+                <h3 className="text-sm sm:text-base font-bold text-amber-950">
+                  ¿Dónde y cómo modificar Cuestionarios, Test, Videos, Docentes y Circulares?
+                </h3>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 text-xs">
+            <button
+              onClick={() => setSubTab('circular')}
+              className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
+            >
+              <div className="font-bold text-[#721B32] flex items-center justify-between">
+                <span>1. Circular Oficial</span>
+                <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">DGETI</span>
+              </div>
+              <p className="text-[11px] text-stone-600 leading-tight">
+                Edita e imprime el oficio circular oficial dirigido a presidentes de academia y tutores.
+              </p>
+            </button>
+
+            <button
+              onClick={() => {
+                setSubTab('ficha');
+              }}
+              className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
+            >
+              <div className="font-bold text-[#721B32] flex items-center justify-between">
+                <span>2. Cuestionarios Examen</span>
+                <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">CRUD</span>
+              </div>
+              <p className="text-[11px] text-stone-600 leading-tight">
+                Añade o edita preguntas, opciones de respuesta y explicaciones de las 4 especialidades.
+              </p>
+            </button>
+
+            <button
+              onClick={() => {
+                setSubTab('docentes');
+              }}
+              className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
+            >
+              <div className="font-bold text-[#721B32] flex items-center justify-between">
+                <span>3. Padrón Docentes</span>
+                <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">Acceso</span>
+              </div>
+              <p className="text-[11px] text-stone-600 leading-tight">
+                Registra o edita el correo Google de tus docentes para habilitar su entrada en Dirección.
+              </p>
+            </button>
+
+            <button
+              onClick={() => {
+                setSubTab('ficha');
+              }}
+              className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
+            >
+              <div className="font-bold text-[#721B32] flex items-center justify-between">
+                <span>4. Videos & Galería</span>
+                <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">YouTube/Drive</span>
+              </div>
+              <p className="text-[11px] text-stone-600 leading-tight">
+                Inserta URLs de videos de YouTube, enlaces de Google Drive y fotos de trabajos estudiantiles.
+              </p>
+            </button>
+          </div>
+        </div>
+      ) : effectiveIsEditor ? (
+        <div className="no-print bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-4 sm:p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+              <Edit3 className="w-5 h-5 text-white" />
+            </div>
+            <div className="text-xs text-emerald-950 space-y-1">
+              <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase font-bold text-emerald-800 tracking-wider">
+                <span>Acceso Docente Autorizado · Perfil Editor</span>
+                <span>•</span>
+                <span>{effectiveDocenteAcceso?.rol || 'Personal Académico'}</span>
+                {effectiveDocenteAcceso?.academia && (
+                  <>
+                    <span>•</span>
+                    <span className="capitalize">
+                      Academia: {effectiveDocenteAcceso.academia === 'rrhh' ? 'Recursos Humanos' : effectiveDocenteAcceso.academia}
+                    </span>
+                  </>
+                )}
+              </div>
+              <h3 className="text-sm sm:text-base font-bold text-emerald-950">
+                Modo Editor Docente — {effectiveDocenteAcceso?.nombre_completo || sesionActiva?.nombre || 'Docente CETis No. 7'}
               </h3>
+              <p className="text-xs text-emerald-900 leading-relaxed">
+                Tienes permisos de edición habilitados por la Dirección General para modificar fichas técnicas, proyectos destacados, videos demostrativos, galería de fotos/videos y el banco de reactivos.
+              </p>
             </div>
           </div>
         </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 text-xs">
-          <button
-            onClick={() => setSubTab('circular')}
-            className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
-          >
-            <div className="font-bold text-[#721B32] flex items-center justify-between">
-              <span>1. Circular Oficial</span>
-              <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">DGETI</span>
+      ) : (
+        <div className="no-print bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 sm:p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-900 flex items-center justify-center shrink-0 border border-blue-300">
+              <Eye className="w-5 h-5 text-blue-800" />
             </div>
-            <p className="text-[11px] text-stone-600 leading-tight">
-              Edita e imprime el oficio circular oficial dirigido a presidentes de academia y tutores.
-            </p>
-          </button>
-
-          <button
-            onClick={() => {
-              setSubTab('ficha');
-            }}
-            className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
-          >
-            <div className="font-bold text-[#721B32] flex items-center justify-between">
-              <span>2. Cuestionarios Examen</span>
-              <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">CRUD</span>
+            <div className="text-xs text-blue-950 space-y-1">
+              <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase font-bold text-blue-800 tracking-wider">
+                <span>Acceso Docente Autorizado · Perfil Lector</span>
+                <span>•</span>
+                <span>{effectiveDocenteAcceso?.rol || 'Personal Académico'}</span>
+                {effectiveDocenteAcceso?.academia && (
+                  <>
+                    <span>•</span>
+                    <span className="capitalize">
+                      Academia: {effectiveDocenteAcceso.academia === 'rrhh' ? 'Recursos Humanos' : effectiveDocenteAcceso.academia}
+                    </span>
+                  </>
+                )}
+              </div>
+              <h3 className="text-sm sm:text-base font-bold text-blue-950">
+                Modo Consulta / Lector — {effectiveDocenteAcceso?.nombre_completo || sesionActiva?.nombre || 'Docente CETis No. 7'}
+              </h3>
+              <p className="text-xs text-blue-900 leading-relaxed">
+                Puedes consultar el tablero de matrícula, resultados del test vocacional, fichas de academia, circular DGETI, padrón estudiantil y descargar reportes. Para solicitar permisos de edición técnica, contacta a Dirección Académica (<strong className="font-mono-code">{BOOTSTRAPPED_ADMIN_EMAIL}</strong>).
+              </p>
             </div>
-            <p className="text-[11px] text-stone-600 leading-tight">
-              Añade o edita preguntas, opciones de respuesta y explicaciones de las 4 especialidades.
-            </p>
-          </button>
-
-          <button
-            onClick={() => {
-              setSubTab('ficha');
-            }}
-            className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
-          >
-            <div className="font-bold text-[#721B32] flex items-center justify-between">
-              <span>3. Test Vocacional</span>
-              <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">Aptitud/Gusto</span>
-            </div>
-            <p className="text-[11px] text-stone-600 leading-tight">
-              Ajusta las preguntas del algoritmo psicométrico de 4 ejes y ponderaciones 50/50.
-            </p>
-          </button>
-
-          <button
-            onClick={() => {
-              setSubTab('ficha');
-            }}
-            className="p-3 bg-white rounded-xl border border-amber-200 hover:border-[#721B32] hover:shadow-xs transition-all text-left space-y-1 cursor-pointer group"
-          >
-            <div className="font-bold text-[#721B32] flex items-center justify-between">
-              <span>4. Videos & Galería</span>
-              <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-mono-code">YouTube/Drive</span>
-            </div>
-            <p className="text-[11px] text-stone-600 leading-tight">
-              Inserta URLs de videos de YouTube, enlaces de Google Drive y fotos de trabajos estudiantiles.
-            </p>
-          </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {savedNotice && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 flex items-center gap-2">
@@ -774,13 +964,15 @@ export const AcademicDirection: React.FC = () => {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleSaveFicha}
-                className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors flex items-center gap-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                Guardar Ficha
-              </button>
+              {effectiveIsEditor && (
+                <button
+                  onClick={handleSaveFicha}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Guardar Ficha
+                </button>
+              )}
               <button
                 onClick={() => window.print()}
                 className="px-3 py-1.5 text-xs font-semibold text-stone-700 bg-white border border-stone-300 rounded-lg hover:bg-stone-50 transition-colors flex items-center gap-1.5"
@@ -813,6 +1005,7 @@ export const AcademicDirection: React.FC = () => {
                   <label className="font-semibold text-stone-700 block mb-0.5">Nombre de la Especialidad:</label>
                   <input
                     type="text"
+                    readOnly={!effectiveIsEditor}
                     value={currentFicha.nombre_especialidad}
                     onChange={e => {
                       const updated = { ...currentFicha, nombre_especialidad: e.target.value };
@@ -825,6 +1018,7 @@ export const AcademicDirection: React.FC = () => {
                   <label className="font-semibold text-stone-700 block mb-0.5">Presidente de Academia:</label>
                   <input
                     type="text"
+                    readOnly={!effectiveIsEditor}
                     value={currentFicha.presidente_academia}
                     onChange={e => {
                       const updated = { ...currentFicha, presidente_academia: e.target.value };
@@ -838,6 +1032,7 @@ export const AcademicDirection: React.FC = () => {
                 <label className="font-semibold text-stone-700 block mb-0.5">Integrantes de la Academia:</label>
                 <input
                   type="text"
+                  readOnly={!effectiveIsEditor}
                   value={currentFicha.integrantes_academia.join(', ')}
                   onChange={e => {
                     const updated = { ...currentFicha, integrantes_academia: e.target.value.split(',').map(s => s.trim()) };
@@ -860,6 +1055,7 @@ export const AcademicDirection: React.FC = () => {
                 </label>
                 <textarea
                   rows={3}
+                  readOnly={!effectiveIsEditor}
                   value={currentFicha.resumen_ejecutivo}
                   onChange={e => {
                     const updated = { ...currentFicha, resumen_ejecutivo: e.target.value };
@@ -908,6 +1104,7 @@ export const AcademicDirection: React.FC = () => {
                         </label>
                         <input
                           type="text"
+                          readOnly={!effectiveIsEditor}
                           placeholder="Ej: https://www.youtube.com/watch?v=... o https://drive.google.com/file/d/.../view"
                           value={currentFicha.recursos_multimedia.video_academia?.url_video || ''}
                           onChange={e => {
@@ -936,6 +1133,7 @@ export const AcademicDirection: React.FC = () => {
                         <label className="font-semibold text-stone-700 block mb-0.5">Título del Video Oficial:</label>
                         <input
                           type="text"
+                          readOnly={!effectiveIsEditor}
                           value={currentFicha.recursos_multimedia.video_academia?.titulo || `Video Oficial de ${currentFicha.nombre_especialidad}`}
                           onChange={e => {
                             const currentVal = currentFicha.recursos_multimedia.video_academia || {
@@ -963,6 +1161,7 @@ export const AcademicDirection: React.FC = () => {
                         <label className="font-semibold text-stone-700 block mb-0.5">Docente / Presentador:</label>
                         <input
                           type="text"
+                          readOnly={!effectiveIsEditor}
                           value={currentFicha.recursos_multimedia.video_academia?.presentador || currentFicha.presidente_academia}
                           onChange={e => {
                             const currentVal = currentFicha.recursos_multimedia.video_academia || {
@@ -990,6 +1189,7 @@ export const AcademicDirection: React.FC = () => {
                         <label className="font-semibold text-stone-700 block mb-0.5">Duración (ej: 4:15 min):</label>
                         <input
                           type="text"
+                          readOnly={!effectiveIsEditor}
                           value={currentFicha.recursos_multimedia.video_academia?.duracion || '3:30 min'}
                           onChange={e => {
                             const currentVal = currentFicha.recursos_multimedia.video_academia || {
@@ -1017,6 +1217,7 @@ export const AcademicDirection: React.FC = () => {
                         <label className="font-semibold text-stone-700 block mb-0.5">Sinopsis / Descripción Pedagógica:</label>
                         <input
                           type="text"
+                          readOnly={!effectiveIsEditor}
                           value={currentFicha.recursos_multimedia.video_academia?.descripcion || ''}
                           onChange={e => {
                             const currentVal = currentFicha.recursos_multimedia.video_academia || {
@@ -1049,32 +1250,34 @@ export const AcademicDirection: React.FC = () => {
                         <Film className="w-4 h-4 text-[#721B32]" />
                         b) Galería con videos o fotos de los trabajos realizados por los alumnos
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
-                          const nuevoItem: ItemGaleriaAlumno = {
-                            id: `gal-${Date.now()}`,
-                            titulo: 'Nuevo Proyecto de Alumnos',
-                            alumnos: 'Equipo de Estudiantes',
-                            semestre: '5° Semestre',
-                            tipo: 'video',
-                            url_media: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-                            descripcion: 'Descripción del trabajo desarrollado en laboratorio.'
-                          };
-                          const updatedFicha = {
-                            ...currentFicha,
-                            recursos_multimedia: {
-                              ...currentFicha.recursos_multimedia,
-                              galeria_alumnos: [...currentGal, nuevoItem]
-                            }
-                          };
-                          setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
-                        }}
-                        className="px-2.5 py-1 bg-[#721B32] text-white rounded text-[11px] font-bold flex items-center gap-1 hover:bg-[#5c1628] transition-colors cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5" /> Agregar Trabajo de Alumno
-                      </button>
+                      {effectiveIsEditor && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
+                            const nuevoItem: ItemGaleriaAlumno = {
+                              id: `gal-${Date.now()}`,
+                              titulo: 'Nuevo Proyecto de Alumnos',
+                              alumnos: 'Equipo de Estudiantes',
+                              semestre: '5° Semestre',
+                              tipo: 'video',
+                              url_media: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+                              descripcion: 'Descripción del trabajo desarrollado en laboratorio.'
+                            };
+                            const updatedFicha = {
+                              ...currentFicha,
+                              recursos_multimedia: {
+                                ...currentFicha.recursos_multimedia,
+                                galeria_alumnos: [...currentGal, nuevoItem]
+                              }
+                            };
+                            setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
+                          }}
+                          className="px-2.5 py-1 bg-[#721B32] text-white rounded text-[11px] font-bold flex items-center gap-1 hover:bg-[#5c1628] transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Agregar Trabajo de Alumno
+                        </button>
+                      )}
                     </div>
 
                     <div className="space-y-3">
@@ -1098,25 +1301,27 @@ export const AcademicDirection: React.FC = () => {
                               </span>
                               <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-stone-500 font-mono-code">{parsed.providerLabel}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
-                                    const updatedGal = currentGal.filter(g => g.id !== item.id);
-                                    const updatedFicha = {
-                                      ...currentFicha,
-                                      recursos_multimedia: {
-                                        ...currentFicha.recursos_multimedia,
-                                        galeria_alumnos: updatedGal
-                                      }
-                                    };
-                                    setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
-                                  }}
-                                  className="text-red-600 hover:text-red-800 p-1 cursor-pointer"
-                                  title="Eliminar este trabajo"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                {effectiveIsEditor && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
+                                      const updatedGal = currentGal.filter(g => g.id !== item.id);
+                                      const updatedFicha = {
+                                        ...currentFicha,
+                                        recursos_multimedia: {
+                                          ...currentFicha.recursos_multimedia,
+                                          galeria_alumnos: updatedGal
+                                        }
+                                      };
+                                      setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
+                                    }}
+                                    className="text-red-600 hover:text-red-800 p-1 cursor-pointer"
+                                    title="Eliminar este trabajo"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
                             </div>
 
@@ -1125,6 +1330,7 @@ export const AcademicDirection: React.FC = () => {
                                 <label className="font-semibold text-stone-700 text-[10px] block">Título:</label>
                                 <input
                                   type="text"
+                                  readOnly={!effectiveIsEditor}
                                   value={item.titulo}
                                   onChange={e => {
                                     const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
@@ -1145,6 +1351,7 @@ export const AcademicDirection: React.FC = () => {
                                 <label className="font-semibold text-stone-700 text-[10px] block">Alumnos Autores:</label>
                                 <input
                                   type="text"
+                                  readOnly={!effectiveIsEditor}
                                   value={item.alumnos}
                                   onChange={e => {
                                     const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
@@ -1165,6 +1372,7 @@ export const AcademicDirection: React.FC = () => {
                                 <label className="font-semibold text-stone-700 text-[10px] block">Semestre:</label>
                                 <input
                                   type="text"
+                                  readOnly={!effectiveIsEditor}
                                   value={item.semestre}
                                   onChange={e => {
                                     const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
@@ -1184,6 +1392,7 @@ export const AcademicDirection: React.FC = () => {
                               <div>
                                 <label className="font-semibold text-stone-700 text-[10px] block">Tipo de Medio:</label>
                                 <select
+                                  disabled={!effectiveIsEditor}
                                   value={item.tipo}
                                   onChange={e => {
                                     const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
@@ -1207,6 +1416,7 @@ export const AcademicDirection: React.FC = () => {
                                 <label className="font-semibold text-stone-700 text-[10px] block">URL de Media (YouTube / Google Drive / Foto):</label>
                                 <input
                                   type="text"
+                                  readOnly={!effectiveIsEditor}
                                   value={item.url_media}
                                   onChange={e => {
                                     const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
@@ -1227,6 +1437,7 @@ export const AcademicDirection: React.FC = () => {
                                 <label className="font-semibold text-stone-700 text-[10px] block">Descripción corta del proyecto:</label>
                                 <input
                                   type="text"
+                                  readOnly={!effectiveIsEditor}
                                   value={item.descripcion}
                                   onChange={e => {
                                     const currentGal = currentFicha.recursos_multimedia.galeria_alumnos || [];
@@ -1266,47 +1477,49 @@ export const AcademicDirection: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-center">
-                    {confirmResetReactivos ? (
-                      <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-2 py-1 rounded-lg text-[11px]">
-                        <span className="font-semibold text-amber-950">¿Restablecer oficiales?</span>
+                  {effectiveIsEditor && (
+                    <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-center">
+                      {confirmResetReactivos ? (
+                        <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-2 py-1 rounded-lg text-[11px]">
+                          <span className="font-semibold text-amber-950">¿Restablecer oficiales?</span>
+                          <button
+                            type="button"
+                            disabled={savingAction}
+                            onClick={() => void handleRestablecerReactivosConfirmado()}
+                            className="px-2 py-0.5 bg-amber-700 text-white rounded font-bold cursor-pointer"
+                          >
+                            Sí
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmResetReactivos(false)}
+                            className="px-2 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
                         <button
                           type="button"
-                          disabled={savingAction}
-                          onClick={() => void handleRestablecerReactivosConfirmado()}
-                          className="px-2 py-0.5 bg-amber-700 text-white rounded font-bold cursor-pointer"
+                          onClick={() => setConfirmResetReactivos(true)}
+                          title="Restablecer los reactivos originales sugeridos para esta academia"
+                          className="px-2.5 py-1 text-[11px] font-semibold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 rounded-lg transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
                         >
-                          Sí
+                          <RotateCcw className="w-3 h-3 text-stone-500" />
+                          <span>Restablecer</span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmResetReactivos(false)}
-                          className="px-2 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
-                        >
-                          No
-                        </button>
-                      </div>
-                    ) : (
+                      )}
+
                       <button
                         type="button"
-                        onClick={() => setConfirmResetReactivos(true)}
-                        title="Restablecer los reactivos originales sugeridos para esta academia"
-                        className="px-2.5 py-1 text-[11px] font-semibold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 rounded-lg transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
+                        onClick={handleAbrirNuevoReactivo}
+                        className="px-3 py-1 bg-[#721B32] hover:bg-[#5b1528] text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
                       >
-                        <RotateCcw className="w-3 h-3 text-stone-500" />
-                        <span>Restablecer</span>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Nuevo Reactivo</span>
                       </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleAbrirNuevoReactivo}
-                      className="px-3 py-1 bg-[#721B32] hover:bg-[#5b1528] text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>+ Nuevo Reactivo</span>
-                    </button>
-                  </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Reactivos List */}
@@ -1343,45 +1556,47 @@ export const AcademicDirection: React.FC = () => {
                             )}
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleAbrirEditarReactivo(rIdx)}
-                              className="px-2 py-1 bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 rounded text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
-                              title="Editar este reactivo"
-                            >
-                              <Edit3 className="w-3 h-3 text-stone-600" />
-                              <span>Editar</span>
-                            </button>
-                            {confirmDeleteReactivoIdx === rIdx ? (
-                              <div className="flex items-center gap-1 bg-red-50 border border-red-300 px-1.5 py-0.5 rounded text-[10px]">
-                                <button
-                                  type="button"
-                                  disabled={savingAction}
-                                  onClick={() => void handleEliminarReactivoConfirmado(rIdx)}
-                                  className="px-1.5 py-0.5 bg-red-700 text-white rounded font-bold cursor-pointer"
-                                >
-                                  Eliminar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteReactivoIdx(null)}
-                                  className="px-1.5 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
-                                >
-                                  No
-                                </button>
-                              </div>
-                            ) : (
+                          {effectiveIsEditor && (
+                            <div className="flex items-center gap-1 shrink-0">
                               <button
                                 type="button"
-                                onClick={() => setConfirmDeleteReactivoIdx(rIdx)}
-                                className="p-1 text-stone-400 hover:text-red-700 hover:bg-red-50 rounded transition-colors cursor-pointer"
-                                title="Eliminar este reactivo"
+                                onClick={() => handleAbrirEditarReactivo(rIdx)}
+                                className="px-2 py-1 bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 rounded text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                                title="Editar este reactivo"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Edit3 className="w-3 h-3 text-stone-600" />
+                                <span>Editar</span>
                               </button>
-                            )}
-                          </div>
+                              {confirmDeleteReactivoIdx === rIdx ? (
+                                <div className="flex items-center gap-1 bg-red-50 border border-red-300 px-1.5 py-0.5 rounded text-[10px]">
+                                  <button
+                                    type="button"
+                                    disabled={savingAction}
+                                    onClick={() => void handleEliminarReactivoConfirmado(rIdx)}
+                                    className="px-1.5 py-0.5 bg-red-700 text-white rounded font-bold cursor-pointer"
+                                  >
+                                    Eliminar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteReactivoIdx(null)}
+                                    className="px-1.5 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
+                                  >
+                                    No
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteReactivoIdx(rIdx)}
+                                  className="p-1 text-stone-400 hover:text-red-700 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                                  title="Eliminar este reactivo"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         <p className="text-xs sm:text-sm font-bold text-stone-900 leading-snug">
@@ -1467,13 +1682,15 @@ export const AcademicDirection: React.FC = () => {
           <div className="no-print bg-white p-4 rounded-xl border border-stone-200 flex items-center justify-between">
             <span className="text-xs text-stone-600 font-medium">Documento normativo emitido por la Subdirección Académica del plantel</span>
             <div className="flex items-center gap-2">
-              <button
-                onClick={handleSaveOficio}
-                className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors flex items-center gap-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                Guardar Oficio
-              </button>
+              {effectiveIsEditor && (
+                <button
+                  onClick={handleSaveOficio}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Guardar Oficio
+                </button>
+              )}
               <button
                 onClick={() => window.print()}
                 className="px-3 py-1.5 text-xs font-semibold text-stone-700 bg-white border border-stone-300 rounded-lg hover:bg-stone-50 transition-colors flex items-center gap-1.5"
@@ -1584,32 +1801,34 @@ export const AcademicDirection: React.FC = () => {
               <div className="text-xs text-stone-500 font-mono-code whitespace-nowrap">
                 Mostrando {filteredEstudiantes.length} de {estudiantes.length} alumnos ({tutoresVerificadosCount} tutores verificados)
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModoInicialRespaldo('respaldar');
-                    setMostrarModalRespaldo(true);
-                  }}
-                  className="px-2.5 py-1 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 border border-stone-300 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                  title="Descargar respaldo de alumnos"
-                >
-                  <Download className="w-3 h-3 text-stone-600" />
-                  <span>Respaldar</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModoInicialRespaldo('reiniciar');
-                    setMostrarModalRespaldo(true);
-                  }}
-                  className="px-2.5 py-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                  title="Reiniciar padrón de alumnos"
-                >
-                  <RotateCcw className="w-3 h-3 text-red-600" />
-                  <span>Reiniciar</span>
-                </button>
-              </div>
+              {effectiveIsAdmin && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoInicialRespaldo('respaldar');
+                      setMostrarModalRespaldo(true);
+                    }}
+                    className="px-2.5 py-1 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 border border-stone-300 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                    title="Descargar respaldo de alumnos"
+                  >
+                    <Download className="w-3 h-3 text-stone-600" />
+                    <span>Respaldar</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoInicialRespaldo('reiniciar');
+                      setMostrarModalRespaldo(true);
+                    }}
+                    className="px-2.5 py-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                    title="Reiniciar padrón de alumnos"
+                  >
+                    <RotateCcw className="w-3 h-3 text-red-600" />
+                    <span>Reiniciar</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1718,7 +1937,7 @@ export const AcademicDirection: React.FC = () => {
       )}
 
       {/* Subtab 5: Padrón de Docentes Autorizados por el Administrador */}
-      {subTab === 'docentes' && (
+      {subTab === 'docentes' && effectiveIsAdmin && (
         <div className="space-y-6">
           {/* Header & KPI Metrics Banner */}
           <div className="bg-white rounded-xl border border-stone-200 p-5 shadow-xs">
@@ -1732,7 +1951,7 @@ export const AcademicDirection: React.FC = () => {
                   Padrón de Docentes & Personal Autorizado
                 </h3>
                 <p className="text-xs text-stone-600">
-                  Catálogo interno de profesores por academia en el CETis No. 7 (el acceso administrativo a Dirección es exclusivo con cuenta Google autorizada).
+                  Todo profesor con estatus <strong>AUTORIZADO</strong> puede ingresar a Dirección (en modo consulta) autenticándose con el correo de Google registrado aquí.
                 </p>
               </div>
 
@@ -1765,16 +1984,17 @@ export const AcademicDirection: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setDocenteFormError(null);
-                    setMostrarModalAltaDocente(true);
-                  }}
+                  onClick={handleAbrirNuevoDocente}
                   className="px-4 py-2 bg-[#721B32] hover:bg-[#5b1528] text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center gap-2 cursor-pointer shrink-0"
                 >
                   <UserPlus className="w-4 h-4 text-amber-300" />
                   <span>+ Dar de Alta Nuevo Profesor</span>
                 </button>
               </div>
+            </div>
+
+            <div className="mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-950">
+              <strong>Entrada para docentes en Dirección:</strong> Registra o edita el correo real de Google (ej. <span className="font-mono-code">profesor@gmail.com</span>) del maestro y asegúrate de que su estatus sea <strong>AUTORIZADO</strong>. Los cambios administrativos de la plataforma siguen reservados exclusivamente a <span className="font-mono-code font-bold">{BOOTSTRAPPED_ADMIN_EMAIL}</span>.
             </div>
 
             {/* KPI Cards */}
@@ -1823,14 +2043,20 @@ export const AcademicDirection: React.FC = () => {
             </div>
           )}
 
-          {/* Modal / Form para Dar de Alta Nuevo Profesor */}
+          {/* Modal / Form para Dar de Alta o Editar Profesor */}
           {mostrarModalAltaDocente && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-stone-900/75 backdrop-blur-xs animate-in fade-in overflow-y-auto">
               <div className="bg-white rounded-2xl shadow-2xl border border-stone-200 max-w-lg w-full overflow-hidden flex flex-col max-h-[95dvh] sm:max-h-[90vh] my-auto">
                 <div className="bg-[#721B32] text-white px-4 sm:px-5 py-3.5 flex items-center justify-between border-b border-[#5a1527] shrink-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    <UserPlus className="w-5 h-5 text-amber-300 shrink-0" />
-                    <h3 className="font-bold text-xs sm:text-sm truncate">Dar de Alta Nuevo Profesor / Docente</h3>
+                    {editingDocenteId ? (
+                      <Edit3 className="w-5 h-5 text-amber-300 shrink-0" />
+                    ) : (
+                      <UserPlus className="w-5 h-5 text-amber-300 shrink-0" />
+                    )}
+                    <h3 className="font-bold text-xs sm:text-sm truncate">
+                      {editingDocenteId ? 'Editar Profesor / Correo de Acceso' : 'Dar de Alta Nuevo Profesor / Docente'}
+                    </h3>
                   </div>
                   <button
                     onClick={() => setMostrarModalAltaDocente(false)}
@@ -1883,18 +2109,22 @@ export const AcademicDirection: React.FC = () => {
                     </div>
                     <div>
                       <label className="block font-bold text-stone-800 mb-1">
-                        Correo Institucional
+                        Correo Google / Institucional <span className="text-red-600">*</span>
                       </label>
                       <input
                         type="email"
+                        required
                         inputMode="email"
                         autoCapitalize="none"
                         autoCorrect="off"
-                        placeholder="Ej. marco.estrada@cetis7.edu.mx"
+                        placeholder="Ej. profesor.academia@gmail.com"
                         value={nuevoCorreo}
                         onChange={e => setNuevoCorreo(e.target.value)}
                         className="w-full px-3.5 py-3 sm:py-2 text-base sm:text-xs font-mono-code border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none"
                       />
+                      <span className="text-[10px] text-stone-500 mt-1 block">
+                        El docente usará este correo con Google Auth para entrar a Dirección si está AUTORIZADO.
+                      </span>
                     </div>
                   </div>
 
@@ -1955,13 +2185,30 @@ export const AcademicDirection: React.FC = () => {
                       className="w-full px-3.5 py-3 sm:py-2 text-base sm:text-xs font-mono-code font-bold tracking-wider border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none"
                     />
                     <span className="text-[10px] text-stone-400 mt-1 block">
-                      Identificador interno de registro (el acceso a Dirección opera únicamente con Google Auth administrador).
+                      Folio interno de identificación en el padrón docente y contraseña/PIN de acceso.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-stone-800 mb-1">
+                      Nivel de Permisos en Dirección <span className="text-red-600">*</span>
+                    </label>
+                    <select
+                      value={nuevoNivelAcceso}
+                      onChange={e => setNuevoNivelAcceso(e.target.value as 'editor' | 'lector')}
+                      className="w-full px-3.5 py-3 sm:py-2 text-base sm:text-xs border border-stone-300 rounded-xl bg-white font-semibold text-stone-900"
+                    >
+                      <option value="lector">Solo ver / Lector (Consulta)</option>
+                      <option value="editor">Editor (Puede modificar fichas, reactivos y circular)</option>
+                    </select>
+                    <span className="text-[10px] text-stone-500 mt-1 block">
+                      El administrador elige si el docente puede editar información o solo consultarla.
                     </span>
                   </div>
 
                   <div>
                     <label className="block font-bold text-stone-800 mb-1.5">
-                      Estatus Inicial de Autorización <span className="text-red-600">*</span>
+                      Estatus de Autorización <span className="text-red-600">*</span>
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <button
@@ -1973,7 +2220,7 @@ export const AcademicDirection: React.FC = () => {
                             : 'bg-white text-emerald-900 border-stone-300 hover:bg-stone-50'
                         }`}
                       >
-                        ✓ AUTORIZADO (Acceso Inmediato)
+                        ✓ AUTORIZADO (Acceso Dirección)
                       </button>
                       <button
                         type="button"
@@ -1999,10 +2246,11 @@ export const AcademicDirection: React.FC = () => {
                     </button>
                     <button
                       type="submit"
-                      className="w-full sm:w-auto px-5 py-3 sm:py-2 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer text-sm sm:text-xs"
+                      disabled={savingAction}
+                      className="w-full sm:w-auto px-5 py-3 sm:py-2 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] disabled:opacity-60 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer text-sm sm:text-xs"
                     >
                       <Check className="w-4 h-4" />
-                      Registrar Profesor
+                      {editingDocenteId ? 'Guardar Cambios' : 'Registrar Profesor'}
                     </button>
                   </div>
                 </form>
@@ -2063,6 +2311,7 @@ export const AcademicDirection: React.FC = () => {
                     <th className="p-3">RFC / ID</th>
                     <th className="p-3">Nombre del Profesor</th>
                     <th className="p-3">Academia & Rol</th>
+                    <th className="p-3">Nivel de Acceso</th>
                     <th className="p-3">Folio Interno</th>
                     <th className="p-3">Estatus Autorización</th>
                     <th className="p-3 text-right">Acciones de Administrador</th>
@@ -2090,6 +2339,30 @@ export const AcademicDirection: React.FC = () => {
                             {doc.academia === 'rrhh' ? 'Recursos Humanos' : doc.academia}
                           </div>
                           <div className="text-[10px] text-stone-500">{doc.rol}</div>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {doc.nivel_acceso === 'editor' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                <Edit3 className="w-3 h-3 text-amber-700" />
+                                Editor (Modifica)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-900 border border-blue-300">
+                                <Eye className="w-3 h-3 text-blue-700" />
+                                Lector (Solo Ver)
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              disabled={savingAction}
+                              onClick={() => void handleCambiarNivelAccesoDocenteClick(doc.id, doc.nivel_acceso === 'editor' ? 'lector' : 'editor')}
+                              className="px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 text-stone-700 border border-stone-300 rounded text-[10px] font-medium transition-colors cursor-pointer"
+                              title={doc.nivel_acceso === 'editor' ? 'Cambiar a Lector (solo ver)' : 'Cambiar a Editor (puede modificar)'}
+                            >
+                              Cambiar
+                            </button>
+                          </div>
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-1.5">
@@ -2136,6 +2409,16 @@ export const AcademicDirection: React.FC = () => {
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              disabled={savingAction}
+                              onClick={() => handleAbrirEditarDocente(doc)}
+                              className="px-2 py-1 bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 rounded text-[10px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                              title="Editar datos o correo Google del docente"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              Editar
+                            </button>
                             {!isAutorizado && (
                               <button
                                 type="button"
@@ -2224,7 +2507,7 @@ export const AcademicDirection: React.FC = () => {
       )}
 
       {/* Subtab 6: Registro en Línea de Cuentas Google Autenticadas */}
-      {subTab === 'accesos' && (
+      {subTab === 'accesos' && effectiveIsAdmin && (
         <div className="space-y-6">
           <div className="bg-white rounded-xl border border-stone-200 p-5 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-200 pb-4">

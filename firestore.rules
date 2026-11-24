@@ -14,6 +14,13 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidEmailDocId(id) {
+      return id is string
+        && id.size() >= 3
+        && id.size() <= 200
+        && id.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -36,6 +43,13 @@ service cloud.firestore {
     function isAdmin() {
       return isVerifiedUser()
         && request.auth.token.email.lower() == 'rafajrosales@gmail.com';
+    }
+
+    function isAuthorizedDocente() {
+      return isVerifiedUser()
+        && isValidEmailDocId(request.auth.token.email.lower())
+        && exists(/databases/$(database)/documents/docente_accesos/$(request.auth.token.email.lower()))
+        && get(/databases/$(database)/documents/docente_accesos/$(request.auth.token.email.lower())).data.estatus_autorizacion == 'AUTORIZADO';
     }
 
     function isOwner(ownerUid) {
@@ -198,7 +212,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'nombre_completo', 'rfc', 'correo_institucional',
-          'academia', 'rol', 'clave_acceso', 'estatus_autorizacion',
+          'academia', 'rol', 'nivel_acceso', 'clave_acceso', 'estatus_autorizacion',
           'fecha_alta', 'registrado_por', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id) && data.id.size() >= 3 && data.id.size() <= 64
@@ -207,10 +221,34 @@ service cloud.firestore {
         && data.correo_institucional is string && data.correo_institucional.size() >= 3 && data.correo_institucional.size() <= 150
         && data.academia is string && data.academia in ['programacion', 'comercio', 'rrhh', 'cosmetologia', 'general']
         && data.rol is string && data.rol in ['Profesor Titular', 'Jefe de Academia', 'Tutor Escolar', 'Subdirector']
+        && (!('nivel_acceso' in data) || (data.nivel_acceso is string && data.nivel_acceso in ['editor', 'lector']))
         && data.clave_acceso is string && data.clave_acceso.size() >= 4 && data.clave_acceso.size() <= 64
         && data.estatus_autorizacion is string && data.estatus_autorizacion in ['AUTORIZADO', 'PENDIENTE', 'REVOCADO']
         && data.fecha_alta is string && data.fecha_alta.size() <= 64
         && (!('registrado_por' in data) || (data.registrado_por is string && data.registrado_por.size() <= 150))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDocenteAcceso(data) {
+      return data.keys().hasAll([
+          'email', 'docente_id', 'nombre_completo',
+          'academia', 'rol', 'estatus_autorizacion',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'email', 'docente_id', 'nombre_completo',
+          'academia', 'rol', 'nivel_acceso', 'clave_acceso', 'estatus_autorizacion',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidEmailDocId(data.email)
+        && isValidId(data.docente_id) && data.docente_id.size() >= 3 && data.docente_id.size() <= 64
+        && data.nombre_completo is string && data.nombre_completo.size() >= 2 && data.nombre_completo.size() <= 150
+        && data.academia is string && data.academia in ['programacion', 'comercio', 'rrhh', 'cosmetologia', 'general']
+        && data.rol is string && data.rol in ['Profesor Titular', 'Jefe de Academia', 'Tutor Escolar', 'Subdirector']
+        && (!('nivel_acceso' in data) || (data.nivel_acceso is string && data.nivel_acceso in ['editor', 'lector']))
+        && (!('clave_acceso' in data) || (data.clave_acceso is string && data.clave_acceso.size() >= 4 && data.clave_acceso.size() <= 64))
+        && data.estatus_autorizacion is string && data.estatus_autorizacion in ['AUTORIZADO', 'PENDIENTE', 'REVOCADO']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -355,8 +393,8 @@ service cloud.firestore {
     }
 
     match /estudiantes/{numControl} {
-      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin());
-      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
+      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin() || isAuthorizedDocente());
+      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin() || isAuthorizedDocente();
       allow create: if isValidId(numControl)
         && isVerifiedUser()
         && isValidEstudiante(incoming())
@@ -405,8 +443,8 @@ service cloud.firestore {
     }
 
     match /evaluaciones/{numControl} {
-      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin());
-      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
+      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin() || isAuthorizedDocente());
+      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin() || isAuthorizedDocente();
       allow create: if isValidId(numControl)
         && isVerifiedUser()
         && isValidEvaluacion(incoming())
@@ -442,8 +480,8 @@ service cloud.firestore {
     }
 
     match /progresos/{numControl} {
-      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin());
-      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
+      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin() || isAuthorizedDocente());
+      allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin() || isAuthorizedDocente();
       allow create: if isValidId(numControl)
         && isVerifiedUser()
         && isValidProgreso(incoming())
@@ -480,8 +518,8 @@ service cloud.firestore {
     }
 
     match /docentes/{docenteId} {
-      allow get: if isValidId(docenteId) && isAdmin();
-      allow list: if isAdmin();
+      allow get: if isValidId(docenteId);
+      allow list: if true;
       allow create: if isValidId(docenteId)
         && isAdmin()
         && isValidDocente(incoming())
@@ -496,14 +534,36 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'nombre_completo', 'rfc', 'correo_institucional', 'academia',
-          'rol', 'clave_acceso', 'estatus_autorizacion', 'registrado_por', 'updatedAt'
+          'rol', 'nivel_acceso', 'clave_acceso', 'estatus_autorizacion', 'registrado_por', 'updatedAt'
         ]);
       allow delete: if isValidId(docenteId) && isAdmin();
     }
 
+    match /docente_accesos/{emailId} {
+      allow get: if isValidEmailDocId(emailId);
+      allow list: if true;
+      allow create: if isValidEmailDocId(emailId)
+        && isAdmin()
+        && isValidDocenteAcceso(incoming())
+        && incoming().email == emailId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidEmailDocId(emailId)
+        && isAdmin()
+        && isValidDocenteAcceso(incoming())
+        && incoming().email == existing().email
+        && incoming().docente_id == existing().docente_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'nombre_completo', 'academia', 'rol', 'nivel_acceso', 'clave_acceso', 'estatus_autorizacion', 'updatedAt'
+        ]);
+      allow delete: if isValidEmailDocId(emailId) && isAdmin();
+    }
+
     match /fichas_academia/{especialidadId} {
-      allow get: if isValidId(especialidadId) && isVerifiedUser();
-      allow list: if (isVerifiedUser() && resource.data.especialidad_id in ['programacion', 'comercio', 'rrhh', 'cosmetologia']) || isAdmin();
+      allow get: if isValidId(especialidadId);
+      allow list: if true;
       allow create: if isValidId(especialidadId)
         && isAdmin()
         && isValidFichaAcademia(incoming())
@@ -525,8 +585,8 @@ service cloud.firestore {
     }
 
     match /configuracion/{configId} {
-      allow get: if isValidId(configId) && isVerifiedUser();
-      allow list: if isAdmin();
+      allow get: if isValidId(configId);
+      allow list: if true;
       allow create: if isValidId(configId)
         && isAdmin()
         && isValidOficioCircular(incoming())

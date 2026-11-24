@@ -224,6 +224,7 @@
           "type": "string",
           "enum": ["Profesor Titular", "Jefe de Academia", "Tutor Escolar", "Subdirector"]
         },
+        "nivel_acceso": { "type": "string", "enum": ["editor", "lector"] },
         "clave_acceso": { "type": "string", "minLength": 4, "maxLength": 64 },
         "estatus_autorizacion": { "type": "string", "enum": ["AUTORIZADO", "PENDIENTE", "REVOCADO"] },
         "fecha_alta": { "type": "string", "maxLength": 64 },
@@ -238,9 +239,47 @@
         "correo_institucional",
         "academia",
         "rol",
+        "nivel_acceso",
         "clave_acceso",
         "estatus_autorizacion",
         "fecha_alta",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DocenteAcceso": {
+      "title": "DocenteAcceso",
+      "description": "Índice normalizado por correo electrónico para validar acceso de docentes autorizados al módulo de Dirección Académica.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "docente_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nombre_completo": { "type": "string", "minLength": 2, "maxLength": 150 },
+        "academia": { "type": "string", "enum": ["programacion", "comercio", "rrhh", "cosmetologia", "general"] },
+        "rol": {
+          "type": "string",
+          "enum": ["Profesor Titular", "Jefe de Academia", "Tutor Escolar", "Subdirector"]
+        },
+        "nivel_acceso": { "type": "string", "enum": ["editor", "lector"] },
+        "clave_acceso": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "estatus_autorizacion": { "type": "string", "enum": ["AUTORIZADO", "PENDIENTE", "REVOCADO"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "email",
+        "docente_id",
+        "nombre_completo",
+        "academia",
+        "rol",
+        "nivel_acceso",
+        "clave_acceso",
+        "estatus_autorizacion",
         "createdAt",
         "updatedAt"
       ]
@@ -375,7 +414,11 @@
     },
     "/docentes/{docenteId}": {
       "schema": { "$ref": "#/entities/DocenteAutorizado" },
-      "description": "Padrón confidencial de docentes autorizados y claves institucionales."
+      "description": "Padrón confidencial de docentes autorizados administrado por rafajrosales@gmail.com."
+    },
+    "/docente_accesos/{emailId}": {
+      "schema": { "$ref": "#/entities/DocenteAcceso" },
+      "description": "Índice autenticado por correo electrónico para habilitar la entrada de docentes autorizados a Dirección Académica en modo consulta."
     },
     "/fichas_academia/{especialidadId}": {
       "schema": { "$ref": "#/entities/FichaAcademiaReq" },
