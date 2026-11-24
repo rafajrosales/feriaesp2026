@@ -498,11 +498,15 @@ export async function cloudDeleteEstudianteCascade(numControl: string, curp?: st
 
 export async function cloudSaveEvaluacion(evaluacion: EvaluacionVocacional): Promise<void> {
   await requireOnlineFirebase(false);
-  const path = `${COLLECTIONS.EVALUACIONES}/${evaluacion.num_control}`;
-  const docRef = doc(db, COLLECTIONS.EVALUACIONES, evaluacion.num_control);
+  const cleanNC = (evaluacion?.num_control || '').trim();
+  if (!cleanNC || cleanNC.includes('/')) {
+    throw new Error('Selecciona o registra un alumno con Número de Control válido antes de guardar la evaluación.');
+  }
+  const path = `${COLLECTIONS.EVALUACIONES}/${cleanNC}`;
+  const docRef = doc(db, COLLECTIONS.EVALUACIONES, cleanNC);
   let opType: OperationType = OperationType.WRITE;
   try {
-    const normalizedPayload = toNormalizedEvaluacionPayload(evaluacion);
+    const normalizedPayload = toNormalizedEvaluacionPayload({ ...evaluacion, num_control: cleanNC });
     const prepared = await prepareWritePayload(docRef, normalizedPayload, true);
     opType = prepared.opType;
     await setDoc(docRef, prepared.payload);
@@ -517,13 +521,17 @@ export async function cloudSaveEvaluacion(evaluacion: EvaluacionVocacional): Pro
 
 export async function cloudSaveProgreso(progreso: ProgresoVirtual): Promise<void> {
   await requireOnlineFirebase(false);
-  const path = `${COLLECTIONS.PROGRESOS}/${progreso.num_control}`;
-  const docRef = doc(db, COLLECTIONS.PROGRESOS, progreso.num_control);
+  const cleanNC = (progreso?.num_control || '').trim();
+  if (!cleanNC || cleanNC.includes('/')) {
+    throw new Error('Selecciona o registra un alumno válido antes de guardar el progreso en Firebase.');
+  }
+  const path = `${COLLECTIONS.PROGRESOS}/${cleanNC}`;
+  const docRef = doc(db, COLLECTIONS.PROGRESOS, cleanNC);
   let opType: OperationType = OperationType.WRITE;
   try {
     const prepared = await prepareWritePayload(
       docRef,
-      progreso as unknown as Record<string, unknown>,
+      { ...progreso, num_control: cleanNC } as unknown as Record<string, unknown>,
       true
     );
     opType = prepared.opType;
@@ -539,13 +547,17 @@ export async function cloudSaveProgreso(progreso: ProgresoVirtual): Promise<void
 
 export async function cloudSaveDocente(docente: DocenteAutorizado): Promise<void> {
   await requireOnlineFirebase(true);
-  const path = `${COLLECTIONS.DOCENTES}/${docente.id}`;
-  const docRef = doc(db, COLLECTIONS.DOCENTES, docente.id);
+  const cleanId = (docente?.id || '').trim();
+  if (!cleanId || cleanId.includes('/')) {
+    throw new Error('El identificador del docente no es válido.');
+  }
+  const path = `${COLLECTIONS.DOCENTES}/${cleanId}`;
+  const docRef = doc(db, COLLECTIONS.DOCENTES, cleanId);
   let opType: OperationType = OperationType.WRITE;
   try {
     const prepared = await prepareWritePayload(
       docRef,
-      docente as unknown as Record<string, unknown>,
+      { ...docente, id: cleanId } as unknown as Record<string, unknown>,
       false
     );
     opType = prepared.opType;
@@ -557,9 +569,13 @@ export async function cloudSaveDocente(docente: DocenteAutorizado): Promise<void
 
 export async function cloudDeleteDocente(id: string): Promise<void> {
   await requireOnlineFirebase(true);
-  const path = `${COLLECTIONS.DOCENTES}/${id}`;
+  const cleanId = (id || '').trim();
+  if (!cleanId || cleanId.includes('/')) {
+    throw new Error('El identificador del docente no es válido.');
+  }
+  const path = `${COLLECTIONS.DOCENTES}/${cleanId}`;
   try {
-    await deleteDoc(doc(db, COLLECTIONS.DOCENTES, id));
+    await deleteDoc(doc(db, COLLECTIONS.DOCENTES, cleanId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -720,8 +736,9 @@ export async function cloudSeedEstudiantesWithRelations(
   try {
     const studentOps: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
     for (const est of estudiantes) {
-      const cleanNC = est.num_control.trim();
-      const cleanCurp = est.curp.trim().toUpperCase();
+      const cleanNC = (est.num_control || '').trim();
+      const cleanCurp = (est.curp || '').trim().toUpperCase();
+      if (!cleanNC || cleanNC.includes('/') || !cleanCurp || cleanCurp.includes('/')) continue;
       const ownerUid = est.ownerUid || user.uid;
       const estPayload = {
         ...sanitizeForFirestore({
@@ -749,10 +766,11 @@ export async function cloudSeedEstudiantesWithRelations(
 
     const relatedOps: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
     for (const ev of Object.values(evaluaciones)) {
-      const cleanNC = ev.num_control.trim();
+      const cleanNC = (ev.num_control || '').trim();
+      if (!cleanNC || cleanNC.includes('/')) continue;
       const matchingEst = estudiantes.find(e => e.num_control.trim() === cleanNC);
       const ownerUid = ev.ownerUid || matchingEst?.ownerUid || user.uid;
-      const norm = toNormalizedEvaluacionPayload({ ...ev, ownerUid });
+      const norm = toNormalizedEvaluacionPayload({ ...ev, num_control: cleanNC, ownerUid });
       relatedOps.push(b =>
         b.set(doc(db, COLLECTIONS.EVALUACIONES, cleanNC), {
           ...sanitizeForFirestore(norm),
@@ -763,12 +781,13 @@ export async function cloudSeedEstudiantesWithRelations(
       );
     }
     for (const prog of Object.values(progresos)) {
-      const cleanNC = prog.num_control.trim();
+      const cleanNC = (prog.num_control || '').trim();
+      if (!cleanNC || cleanNC.includes('/')) continue;
       const matchingEst = estudiantes.find(e => e.num_control.trim() === cleanNC);
       const ownerUid = prog.ownerUid || matchingEst?.ownerUid || user.uid;
       relatedOps.push(b =>
         b.set(doc(db, COLLECTIONS.PROGRESOS, cleanNC), {
-          ...sanitizeForFirestore(prog as unknown as Record<string, unknown>),
+          ...sanitizeForFirestore({ ...prog, num_control: cleanNC } as unknown as Record<string, unknown>),
           ownerUid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()

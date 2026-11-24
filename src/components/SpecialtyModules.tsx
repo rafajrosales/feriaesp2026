@@ -64,7 +64,9 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
   const currentSpecialty = ESPECIALIDADES.find(s => s.id === selectedId) || ESPECIALIDADES[0];
   const currentFicha = fichas[selectedId];
   const currentProgress = progreso.progreso_especialidades[selectedId];
-  const canUpdateProgreso = sesionActiva?.tipo === 'docente' || progreso.estatus_fase_virtual !== 'COMPLETADO';
+  const hasActiveStudent = Boolean(progreso.num_control && progreso.num_control.trim());
+  const canUpdateProgreso =
+    hasActiveStudent && (sesionActiva?.tipo === 'docente' || progreso.estatus_fase_virtual !== 'COMPLETADO');
 
   const cloneAndUpdateSpecialty = (patch: Partial<ProgresoEspecialidad>) => {
     if (!canUpdateProgreso) return;

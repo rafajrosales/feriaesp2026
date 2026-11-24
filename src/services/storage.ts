@@ -1090,8 +1090,10 @@ export async function saveEvaluacionVocacional(evaluacion: EvaluacionVocacional)
 export async function saveProgresoVirtual(
   progreso: ProgresoVirtual
 ): Promise<{ success: boolean; progreso: ProgresoVirtual; error?: string }> {
+  const cleanNC = (progreso?.num_control || '').trim();
   const cloneProgreso: ProgresoVirtual = {
     ...progreso,
+    num_control: cleanNC,
     progreso_especialidades: {
       programacion: { ...progreso.progreso_especialidades.programacion },
       comercio: { ...progreso.progreso_especialidades.comercio },
@@ -1099,6 +1101,10 @@ export async function saveProgresoVirtual(
       cosmetologia: { ...progreso.progreso_especialidades.cosmetologia }
     }
   };
+
+  if (!cleanNC) {
+    return { success: true, progreso: cloneProgreso };
+  }
 
   let pct = 0;
   if (cloneProgreso.test_vocacional_completado) pct += 20;

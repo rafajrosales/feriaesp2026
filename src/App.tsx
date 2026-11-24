@@ -210,6 +210,9 @@ export default function App() {
 
   const handleUpdateProgreso = async (nuevoProgreso: ProgresoVirtual) => {
     setSyncActionError(null);
+    if (!nuevoProgreso.num_control || !nuevoProgreso.num_control.trim()) {
+      return;
+    }
     const res = await saveProgresoVirtual(nuevoProgreso);
     if (!res.success && res.error) {
       setSyncActionError(res.error);
