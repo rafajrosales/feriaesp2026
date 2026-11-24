@@ -1,5 +1,16 @@
 export type SpecialtyId = 'programacion' | 'comercio' | 'rrhh' | 'cosmetologia';
 
+export const GRUPOS_PRIMER_SEMESTRE = [
+  '1°A',
+  '1°B',
+  '1°C',
+  '1°D',
+  '1°E',
+  '1°F',
+  '1°G',
+  '1°H'
+] as const;
+
 export interface TutorLegal {
   nombre_tutor: string;
   parentesco: 'Padre' | 'Madre' | 'Tutor Legal';
@@ -15,7 +26,7 @@ export interface Estudiante {
   num_control: string;
   nombre_completo: string;
   grupo: string;
-  turno: 'MATUTINO' | 'VESPERTINO';
+  turno: 'MATUTINO';
   correo_institucional: string;
   curp: string;
   avatar_url?: string;
@@ -218,5 +229,24 @@ export interface DocenteAutorizado {
   estatus_autorizacion: 'AUTORIZADO' | 'PENDIENTE' | 'REVOCADO';
   fecha_alta: string;
   registrado_por?: string;
+}
+
+export interface AccesoGoogleEvento {
+  fecha_iso: string;
+  origen: string;
+  metodo: 'login_interactivo' | 'sesion_activa';
+}
+
+export interface AccesoGoogle {
+  uid: string;
+  email: string;
+  nombre_google: string;
+  foto_url?: string;
+  es_admin: boolean;
+  primer_acceso: string;
+  ultimo_acceso: string;
+  total_accesos: number;
+  ultimo_origen: string;
+  historial_reciente: AccesoGoogleEvento[];
 }
 

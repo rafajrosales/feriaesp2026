@@ -1,25 +1,26 @@
 # Especificación de Seguridad Firestore — Feria de Especialidades CETis No. 7
 
-## 1. Arquitectura de Base de Datos Única en Línea (8 Colecciones Normalizadas)
+## 1. Arquitectura de Base de Datos Única en Línea (9 Colecciones Normalizadas)
 
 Toda persistencia de la plataforma (tanto en AI Studio como en producción en `https://feriac7.vercel.app/`) opera exclusivamente en línea contra la base única de Cloud Firestore (`gen-lang-client-0550420170` / `ai-studio-cetisno7feriadee-0d6232a8-7486-4926-bbe7-5550c23951e3`), sin almacenamiento local (`localStorage`) ni modo offline:
 
-1. `/admins/{userId}` — Administradores institucionales verificados.
-2. `/estudiantes/{numControl}` — Padrón de alumnos y tutor legal embebido.
-3. `/curp_registry/{curp}` — Índice público-autenticado sin PII para garantizar unicidad global de CURP entre dispositivos.
-4. `/evaluaciones/{numControl}` — Resultados normalizados del Test Vocacional de 40 reactivos (sin campos derivados redundantes).
-5. `/progresos/{numControl}` — Avance integral (0–100%) y Constancia QR.
-6. `/docentes/{docenteId}` — Padrón confidencial de docentes (solo administradores).
-7. `/fichas_academia/{especialidadId}` — Fuente única de verdad para metadata, multimedia (`video_academia`, `galeria_alumnos`) y `banco_reactivos` de las 4 especialidades.
-8. `/configuracion/{configId}` — Configuración institucional única (`oficio_circular`).
+1. `/admins/{userId}` — Registro reservado exclusivamente para la única cuenta administradora (`rafajrosales@gmail.com`).
+2. `/accesos_google/{userId}` — Registro en línea de cada cuenta Google que se autentica (lectura global solo para `rafajrosales@gmail.com`).
+3. `/estudiantes/{numControl}` — Padrón de alumnos (1°A a 1°H, turno único `MATUTINO`) y tutor legal embebido.
+4. `/curp_registry/{curp}` — Índice autenticado sin PII para garantizar unicidad global de CURP entre dispositivos.
+5. `/evaluaciones/{numControl}` — Resultados normalizados del Test Vocacional de 40 reactivos (sin campos derivados redundantes).
+6. `/progresos/{numControl}` — Avance integral (0–100%) y Constancia QR.
+7. `/docentes/{docenteId}` — Padrón confidencial de docentes (solo administrador).
+8. `/fichas_academia/{especialidadId}` — Fuente única de verdad para metadata, multimedia (`video_academia`, `galeria_alumnos`) y `banco_reactivos` de las 4 especialidades.
+9. `/configuracion/{configId}` — Configuración institucional única (`oficio_circular`).
 
 ## 2. Invariantes de Datos (Data Invariants)
 
-1. **Autenticación Verificada Obligatoria (Sin Modo Offline):** Ningún usuario anónimo o no autenticado (`request.auth == null` o `email_verified == false`) puede leer ni escribir en ninguna colección de Firestore.
-2. **Aislamiento de PII (Datos Personales):** La colección `estudiantes` (CURP, teléfonos, correos, tutor) y `docentes` (RFC, claves institucionales) solo pueden ser leídas o listadas por su dueño (`resource.data.ownerUid == request.auth.uid`) o por administradores institucionales verificados (`isAdmin()`). `curp_registry` expone únicamente consultas puntuales `get` sin PII ni permiso de `list` para alumnos.
-3. **Unicidad Global Atómica de CURP (`existsAfter` / `getAfter`):** Ningún documento en `estudiantes/{numControl}` puede crearse sin crear atómicamente su correspondiente reserva en `curp_registry/{curp}` (y viceversa), impidiendo registros duplicados desde distintos navegadores o sesiones.
+1. **Autenticación Verificada Obligatoria y Administrador Único:** Ningún usuario no autenticado (`request.auth == null` o `email_verified == false`) puede leer ni escribir. Además, la **única** cuenta habilitada para privilegios de administrador (`isAdmin()`) y modificaciones administrativas es `rafajrosales@gmail.com`.
+2. **Aislamiento de PII (Datos Personales):** Las colecciones `estudiantes`, `accesos_google` y `docentes` solo pueden ser leídas por su dueño (cuando aplica) o por `rafajrosales@gmail.com`. Nadie distinto al administrador puede listar `accesos_google` ni suplantar el `email` o `uid` de otro usuario.
+3. **Unicidad Global Atómica de CURP (`existsAfter` / `getAfter`):** Ningún documento en `estudiantes/{numControl}` puede crearse sin crear atómicamente su correspondiente reserva en `curp_registry/{curp}` (y viceversa), impidiendo registros duplicados desde distintos navegadores o sesiones. Todos los alumnos pertenecen exclusivamente al turno `MATUTINO` (grupos `1°A` a `1°H`).
 4. **Integridad Referencial y Cero Redundancia:** Ninguna evaluación (`evaluaciones/{numControl}`) ni progreso (`progresos/{numControl}`) puede crearse sin que exista `estudiantes/{numControl}`. En `evaluaciones`, solo se almacenan `desglose_partes` y `respuestas` compactas; todos los puntajes, porcentajes e indicadores Aptitud/Gusto se calculan dinámicamente en cliente.
-5. **Bloqueo de Estado Terminal (Terminal State Locking):** Una vez que `progresos.estatus_fase_virtual == 'COMPLETADO'`, solo un administrador (`isAdmin()`) puede modificar el registro.
+5. **Bloqueo de Estado Terminal (Terminal State Locking):** Una vez que `progresos.estatus_fase_virtual == 'COMPLETADO'`, solo `rafajrosales@gmail.com` (`isAdmin()`) puede modificar el registro.
 6. **Inmutabilidad de Campos Críticos y Marcas Temporales del Servidor:** `ownerUid`, `num_control`, `curp`, `clave_unica_token` y `createdAt` son inmutables tras la creación. Tanto `createdAt` como `updatedAt` deben coincidir estrictamente con `request.time`.
 7. **Validación Estricta de Claves y Límites de Tamaño:** Toda creación y actualización pasa por `isValid[Entity](incoming())`, prohibiendo campos fantasma (`keys().hasOnly(...)`) y acotando longitudes de cadenas y arreglos.
 

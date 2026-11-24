@@ -10,7 +10,9 @@ import {
   DocenteAutorizado,
   ReactivoExamen,
   LetraOpcionVocacional,
-  DesglosePartesVocacional
+  DesglosePartesVocacional,
+  AccesoGoogle,
+  AccesoGoogleEvento
 } from '../types';
 import {
   ESTUDIANTES_INICIALES,
@@ -31,6 +33,7 @@ import {
   cloudDeleteEstudianteCascade,
   cloudEnsureInstitutionalDefaultsIfEmpty,
   cloudRegisterEstudianteAtomic,
+  cloudRegistrarAccesoGoogle,
   cloudSaveDocente,
   cloudSaveEstudiante,
   cloudSaveEvaluacion,
@@ -49,7 +52,8 @@ import {
 
 const SESSION_KEYS = {
   ESTUDIANTE_ACTIVO: 'cetis7_session_estudiante_activo_nc',
-  SESION_ACTIVA: 'cetis7_session_usuario_activa'
+  SESION_ACTIVA: 'cetis7_session_usuario_activa',
+  AUTH_LOGGED_UID: 'cetis7_session_auth_logged_uid'
 } as const;
 
 // Purge legacy localStorage tables if present from older versions
@@ -151,6 +155,7 @@ export interface OnlineDbState {
   fichas: Record<string, FichaAcademiaReq>;
   oficio: OficioCircular;
   docentes: DocenteAutorizado[];
+  accesosGoogle: AccesoGoogle[];
 }
 
 const initialDbState: OnlineDbState = {
@@ -166,13 +171,15 @@ const initialDbState: OnlineDbState = {
   progresos: {},
   fichas: { ...FICHAS_ACADEMIA_DEFAULT },
   oficio: { ...OFICIO_CIRCULAR_DEFAULT },
-  docentes: []
+  docentes: [],
+  accesosGoogle: []
 };
 
 let dbState: OnlineDbState = { ...initialDbState };
 const storeListeners = new Set<() => void>();
 let activeUnsubscribe: (() => void) | null = null;
 let connectedUserUid: string | null = null;
+let inFlightConnect: { key: string; promise: Promise<ResultadoSyncBD> } | null = null;
 
 function emitStoreChange() {
   storeListeners.forEach(listener => listener());
@@ -214,6 +221,10 @@ export function disconnectOnlineDatabase(): void {
     activeUnsubscribe = null;
   }
   connectedUserUid = null;
+  inFlightConnect = null;
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.removeItem(SESSION_KEYS.AUTH_LOGGED_UID);
+  }
   updateDbState({
     ...initialDbState,
     online: typeof navigator !== 'undefined' ? navigator.onLine !== false : true
@@ -263,102 +274,124 @@ export async function connectOnlineDatabase(user: User, isAdmin: boolean): Promi
     };
   }
 
-  if (activeUnsubscribe) {
-    activeUnsubscribe();
-    activeUnsubscribe = null;
+  const connectKey = `${user.uid}:${isAdmin ? 'admin' : 'user'}`;
+  if (inFlightConnect && inFlightConnect.key === connectKey) {
+    return inFlightConnect.promise;
   }
 
-  connectedUserUid = user.uid;
-  updateDbState({ loading: true, syncError: null, isAdmin });
+  const runConnect = async (): Promise<ResultadoSyncBD> => {
+    if (activeUnsubscribe) {
+      activeUnsubscribe();
+      activeUnsubscribe = null;
+    }
 
-  const reachable = await testConnection(true);
-  if (!reachable) {
-    const msg = 'No se pudo conectar con la base de datos única en Firebase Firestore.';
-    updateDbState({ connected: false, loading: false, syncError: msg });
+    connectedUserUid = user.uid;
+    updateDbState({ loading: true, syncError: null, isAdmin });
+
+    const reachable = await testConnection(true);
+    if (!reachable) {
+      const msg = 'No se pudo conectar con la base de datos única en Firebase Firestore.';
+      updateDbState({ connected: false, loading: false, syncError: msg });
+      return {
+        connected: false,
+        requiresAuth: false,
+        isAdmin,
+        userEmail: user.email,
+        estudiantesCount: 0,
+        evaluacionesCount: 0,
+        progresosCount: 0,
+        syncedAt: new Date().toISOString(),
+        error: msg
+      };
+    }
+
+    if (isAdmin) {
+      await cloudEnsureInstitutionalDefaultsIfEmpty(FICHAS_ACADEMIA_DEFAULT, OFICIO_CIRCULAR_DEFAULT).catch(err => {
+        console.warn('No se pudieron verificar defaults institucionales:', err);
+      });
+    }
+
+    activeUnsubscribe = subscribeAppDatabase(user, isAdmin, {
+      onEstudiantes: list => {
+        updateDbState({
+          connected: true,
+          loading: false,
+          ready: true,
+          estudiantes: list,
+          syncError: null,
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onEvaluaciones: dict => {
+        updateDbState({
+          connected: true,
+          evaluaciones: dict,
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onProgresos: dict => {
+        updateDbState({
+          connected: true,
+          progresos: dict,
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onFichas: dict => {
+        const merged = { ...FICHAS_ACADEMIA_DEFAULT, ...dict };
+        updateDbState({
+          connected: true,
+          fichas: merged,
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onOficio: oficio => {
+        updateDbState({
+          connected: true,
+          oficio: oficio || { ...OFICIO_CIRCULAR_DEFAULT },
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onDocentes: list => {
+        updateDbState({
+          connected: true,
+          docentes: list,
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onAccesosGoogle: list => {
+        updateDbState({
+          connected: true,
+          accesosGoogle: list,
+          lastSyncAt: new Date().toISOString()
+        });
+      },
+      onError: err => {
+        updateDbState({
+          loading: false,
+          syncError: err.message
+        });
+      }
+    });
+
     return {
-      connected: false,
+      connected: true,
       requiresAuth: false,
       isAdmin,
       userEmail: user.email,
-      estudiantesCount: 0,
-      evaluacionesCount: 0,
-      progresosCount: 0,
-      syncedAt: new Date().toISOString(),
-      error: msg
+      estudiantesCount: dbState.estudiantes.length,
+      evaluacionesCount: Object.keys(dbState.evaluaciones).length,
+      progresosCount: Object.keys(dbState.progresos).length,
+      syncedAt: new Date().toISOString()
     };
-  }
+  };
 
-  if (isAdmin) {
-    await cloudEnsureInstitutionalDefaultsIfEmpty(FICHAS_ACADEMIA_DEFAULT, OFICIO_CIRCULAR_DEFAULT).catch(err => {
-      console.warn('No se pudieron verificar defaults institucionales:', err);
-    });
-  }
-
-  activeUnsubscribe = subscribeAppDatabase(user, isAdmin, {
-    onEstudiantes: list => {
-      updateDbState({
-        connected: true,
-        loading: false,
-        ready: true,
-        estudiantes: list,
-        syncError: null,
-        lastSyncAt: new Date().toISOString()
-      });
-    },
-    onEvaluaciones: dict => {
-      updateDbState({
-        connected: true,
-        evaluaciones: dict,
-        lastSyncAt: new Date().toISOString()
-      });
-    },
-    onProgresos: dict => {
-      updateDbState({
-        connected: true,
-        progresos: dict,
-        lastSyncAt: new Date().toISOString()
-      });
-    },
-    onFichas: dict => {
-      const merged = { ...FICHAS_ACADEMIA_DEFAULT, ...dict };
-      updateDbState({
-        connected: true,
-        fichas: merged,
-        lastSyncAt: new Date().toISOString()
-      });
-    },
-    onOficio: oficio => {
-      updateDbState({
-        connected: true,
-        oficio: oficio || { ...OFICIO_CIRCULAR_DEFAULT },
-        lastSyncAt: new Date().toISOString()
-      });
-    },
-    onDocentes: list => {
-      updateDbState({
-        connected: true,
-        docentes: list,
-        lastSyncAt: new Date().toISOString()
-      });
-    },
-    onError: err => {
-      updateDbState({
-        loading: false,
-        syncError: err.message
-      });
+  const promise = runConnect().finally(() => {
+    if (inFlightConnect?.promise === promise) {
+      inFlightConnect = null;
     }
   });
-
-  return {
-    connected: true,
-    requiresAuth: false,
-    isAdmin,
-    userEmail: user.email,
-    estudiantesCount: dbState.estudiantes.length,
-    evaluacionesCount: Object.keys(dbState.evaluaciones).length,
-    progresosCount: Object.keys(dbState.progresos).length,
-    syncedAt: new Date().toISOString()
-  };
+  inFlightConnect = { key: connectKey, promise };
+  return promise;
 }
 
 export interface ResultadoSyncBD {
@@ -903,6 +936,7 @@ export async function registrarNuevoEstudiante(estudiante: Estudiante): Promise<
       ...estudiante,
       curp: cleanCurp,
       num_control: cleanNC,
+      turno: 'MATUTINO',
       correo_institucional:
         estudiante.correo_institucional ||
         `${estudiante.nombre_completo.split(' ')[0].toLowerCase()}.${cleanNC.slice(-4)}@cetis7.edu.mx`,
@@ -930,11 +964,32 @@ export async function registrarNuevoEstudiante(estudiante: Estudiante): Promise<
   }
 }
 
+export async function registrarAccesoGoogleEnNube(
+  user: User,
+  isAdminFlag: boolean,
+  metodo: AccesoGoogleEvento['metodo'] = 'login_interactivo'
+): Promise<void> {
+  if (!user || !user.emailVerified) return;
+  if (typeof window !== 'undefined' && metodo === 'sesion_activa') {
+    const alreadyLogged = window.sessionStorage.getItem(SESSION_KEYS.AUTH_LOGGED_UID);
+    if (alreadyLogged === user.uid) return;
+  }
+  try {
+    await cloudRegistrarAccesoGoogle(user, isAdminFlag, metodo);
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(SESSION_KEYS.AUTH_LOGGED_UID, user.uid);
+    }
+  } catch (error) {
+    console.warn('No se pudo registrar el acceso de Google en Firebase:', error);
+  }
+}
+
 export async function saveEstudiante(estudiante: Estudiante): Promise<{ success: boolean; error?: string }> {
   try {
-    await cloudSaveEstudiante(estudiante);
-    const list = dbState.estudiantes.filter(e => e.num_control !== estudiante.num_control);
-    updateDbState({ estudiantes: [...list, estudiante] });
+    const normalizedEst: Estudiante = { ...estudiante, turno: 'MATUTINO' };
+    await cloudSaveEstudiante(normalizedEst);
+    const list = dbState.estudiantes.filter(e => e.num_control !== normalizedEst.num_control);
+    updateDbState({ estudiantes: [...list, normalizedEst] });
     return { success: true };
   } catch (error) {
     return {
@@ -1320,7 +1375,8 @@ export async function restaurarDesdeRespaldoJSON(jsonString: string): Promise<{
       };
     }
 
-    const alumnos: Estudiante[] = Array.isArray(data.datos.alumnos) ? data.datos.alumnos : [];
+    const rawAlumnos = Array.isArray(data.datos.alumnos) ? (data.datos.alumnos as Estudiante[]) : [];
+    const alumnos: Estudiante[] = rawAlumnos.map(a => ({ ...a, turno: 'MATUTINO' as const }));
     const docentes: DocenteAutorizado[] = Array.isArray(data.datos.docentes) ? data.datos.docentes : [];
     const rawEval = (data.datos.evaluaciones || {}) as Record<string, Record<string, unknown>>;
     const normalizedEval: Record<string, EvaluacionVocacional> = {};

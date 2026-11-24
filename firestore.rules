@@ -27,15 +27,15 @@ service cloud.firestore {
     }
 
     function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
-    }
-
-    function isBootstrappedAdmin() {
-      return isVerifiedUser() && request.auth.token.email == 'rafajrosales@gmail.com';
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && ('email' in request.auth.token)
+        && request.auth.token.email is string;
     }
 
     function isAdmin() {
-      return isBootstrappedAdmin() || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+      return isVerifiedUser()
+        && request.auth.token.email.lower() == 'rafajrosales@gmail.com';
     }
 
     function isOwner(ownerUid) {
@@ -109,7 +109,7 @@ service cloud.firestore {
         && isValidId(data.num_control) && data.num_control.size() >= 4 && data.num_control.size() <= 64
         && data.nombre_completo is string && data.nombre_completo.size() >= 2 && data.nombre_completo.size() <= 150
         && data.grupo is string && data.grupo.size() >= 1 && data.grupo.size() <= 20
-        && data.turno is string && data.turno in ['MATUTINO', 'VESPERTINO']
+        && data.turno is string && data.turno == 'MATUTINO'
         && data.correo_institucional is string && data.correo_institucional.size() >= 3 && data.correo_institucional.size() <= 150
         && isValidId(data.curp) && data.curp.size() >= 10 && data.curp.size() <= 20
         && (!('avatar_url' in data) || (data.avatar_url is string && data.avatar_url.size() <= 500))
@@ -267,11 +267,37 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidAccesoGoogle(data) {
+      return data.keys().hasAll([
+          'uid', 'email', 'nombre_google', 'es_admin',
+          'primer_acceso', 'ultimo_acceso', 'total_accesos',
+          'ultimo_origen', 'historial_reciente', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'email', 'nombre_google', 'foto_url', 'es_admin',
+          'primer_acceso', 'ultimo_acceso', 'total_accesos',
+          'ultimo_origen', 'historial_reciente', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid) && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.nombre_google is string && data.nombre_google.size() >= 1 && data.nombre_google.size() <= 150
+        && (!('foto_url' in data) || (data.foto_url is string && data.foto_url.size() <= 500))
+        && data.es_admin is bool
+        && data.primer_acceso is string && data.primer_acceso.size() >= 4 && data.primer_acceso.size() <= 64
+        && data.ultimo_acceso is string && data.ultimo_acceso.size() >= 4 && data.ultimo_acceso.size() <= 64
+        && data.total_accesos is number && data.total_accesos >= 1 && data.total_accesos <= 1000000
+        && data.ultimo_origen is string && data.ultimo_origen.size() >= 1 && data.ultimo_origen.size() <= 250
+        && data.historial_reciente is list && data.historial_reciente.size() >= 1 && data.historial_reciente.size() <= 10
+        && data.historial_reciente[0] is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // -----------------------------------------------------------------
     // Collection Rules
     // -----------------------------------------------------------------
     match /admins/{userId} {
-      allow get: if isValidId(userId) && ((isVerifiedUser() && request.auth.uid == userId) || isAdmin());
+      allow get: if isValidId(userId) && isAdmin();
       allow list: if isAdmin();
       allow create: if isValidId(userId)
         && isAdmin()
@@ -286,6 +312,45 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'updatedAt']);
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /accesos_google/{userId} {
+      allow get: if isValidId(userId) && ((isVerifiedUser() && request.auth.uid == userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && request.auth.uid == userId
+        && isValidAccesoGoogle(incoming())
+        && incoming().uid == userId
+        && incoming().email.lower() == request.auth.token.email.lower()
+        && incoming().es_admin == isAdmin()
+        && incoming().total_accesos == 1
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && (request.auth.uid == userId || isAdmin())
+        && isValidAccesoGoogle(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email.lower() == existing().email.lower()
+        && incoming().primer_acceso == existing().primer_acceso
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId
+            && incoming().email.lower() == request.auth.token.email.lower()
+            && incoming().es_admin == isAdmin()
+            && incoming().total_accesos >= existing().total_accesos
+            && incoming().total_accesos <= existing().total_accesos + 1
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'nombre_google', 'foto_url', 'es_admin', 'ultimo_acceso',
+              'total_accesos', 'ultimo_origen', 'historial_reciente', 'updatedAt'
+            ])
+          )
+        );
       allow delete: if isValidId(userId) && isAdmin();
     }
 

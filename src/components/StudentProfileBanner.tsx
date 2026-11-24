@@ -72,7 +72,7 @@ export const StudentProfileBanner: React.FC<StudentProfileBannerProps> = ({
               <span className="text-stone-300">·</span>
               <span className="text-xs font-mono-code text-stone-600">{estudiante.num_control}</span>
               <span className="text-stone-300">·</span>
-              <span className="text-xs font-semibold text-stone-700">{estudiante.grupo} ({estudiante.turno})</span>
+              <span className="text-xs font-semibold text-stone-700">{estudiante.grupo} · Turno Matutino</span>
             </div>
 
             <div className="flex items-center gap-2 mt-0.5">

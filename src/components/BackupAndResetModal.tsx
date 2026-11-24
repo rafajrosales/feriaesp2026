@@ -82,7 +82,7 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
       `"${e.nombre_completo}"`,
       `"${e.curp}"`,
       `"${e.grupo}"`,
-      `"${e.turno}"`,
+      `"MATUTINO"`,
       `"${e.telefono_alumno || ''}"`,
       `"${e.tutor?.nombre_tutor || ''}"`,
       `"${e.tutor?.correo_tutor || ''}"`,

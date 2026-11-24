@@ -33,7 +33,9 @@ import {
   ProgresoVirtual,
   DocenteAutorizado,
   FichaAcademiaReq,
-  OficioCircular
+  OficioCircular,
+  AccesoGoogle,
+  AccesoGoogleEvento
 } from '../types';
 import {
   normalizeEvaluacionFromFirestore,
@@ -71,11 +73,14 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+export const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
+export const FIREBASE_DATABASE_ID = firebaseConfig.firestoreDatabaseId || '(default)';
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'rafajrosales@gmail.com';
 export const CONFIG_OFICIO_ID = 'oficio_circular';
 
 export const COLLECTIONS = {
   ADMINS: 'admins',
+  ACCESOS_GOOGLE: 'accesos_google',
   ESTUDIANTES: 'estudiantes',
   CURP_REGISTRY: 'curp_registry',
   DOCENTES: 'docentes',
@@ -250,27 +255,12 @@ export function onFirebaseAuthChange(callback: (user: User | null) => void): () 
 }
 
 /**
- * Verifies admin status strictly against Firestore rules:
- * bootstrapped admin email OR `/admins/{uid}` document with `role === 'admin'`.
+ * Verifies admin status strictly against the sole authorized administrator email:
+ * rafajrosales@gmail.com (with verified email).
  */
 export async function checkIsFirebaseAdmin(user: User | null = auth.currentUser): Promise<boolean> {
-  if (!user || !user.emailVerified) return false;
-  if (user.email && user.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL) {
-    return true;
-  }
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    return false;
-  }
-  const connected = await testConnection();
-  if (!connected) {
-    return false;
-  }
-  try {
-    const snap = await getDocFromServer(doc(db, COLLECTIONS.ADMINS, user.uid));
-    return snap.exists() && snap.data()?.role === 'admin';
-  } catch {
-    return false;
-  }
+  if (!user || !user.emailVerified || !user.email) return false;
+  return user.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
 }
 
 export async function requireOnlineFirebase(requireAdmin = false): Promise<{ user: User; isAdmin: boolean }> {
@@ -409,6 +399,7 @@ export async function cloudRegisterEstudianteAtomic(estudiante: Estudiante): Pro
       ...estudiante,
       num_control: cleanNC,
       curp: cleanCurp,
+      turno: 'MATUTINO',
       ownerUid
     };
 
@@ -446,15 +437,19 @@ export async function cloudSaveEstudiante(estudiante: Estudiante): Promise<void>
   try {
     const snap = await getDocFromServer(estRef);
     if (!snap.exists()) {
-      await cloudRegisterEstudianteAtomic(estudiante);
+      await cloudRegisterEstudianteAtomic({ ...estudiante, turno: 'MATUTINO' });
       return;
     }
     const existingData = snap.data() as Record<string, unknown>;
-    const sanitized = sanitizeForFirestore(estudiante as unknown as Record<string, unknown>);
+    const sanitized = sanitizeForFirestore({
+      ...estudiante,
+      turno: 'MATUTINO'
+    } as unknown as Record<string, unknown>);
     const payload = {
       ...sanitized,
       num_control: existingData.num_control,
       curp: existingData.curp,
+      turno: 'MATUTINO',
       ownerUid: existingData.ownerUid,
       createdAt: existingData.createdAt,
       updatedAt: serverTimestamp()
@@ -707,6 +702,7 @@ export async function cloudSeedEstudiantesWithRelations(
         ...est,
         num_control: cleanNC,
         curp: cleanCurp,
+        turno: 'MATUTINO',
         ownerUid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -776,6 +772,79 @@ export async function cloudSeedDocentesList(docentes: DocenteAutorizado[]): Prom
 }
 
 // ---------------------------------------------------------------------
+// Google Authentication Registry (/accesos_google/{uid})
+// ---------------------------------------------------------------------
+
+export async function cloudRegistrarAccesoGoogle(
+  user: User,
+  isAdminFlag: boolean,
+  metodo: AccesoGoogleEvento['metodo'] = 'login_interactivo'
+): Promise<void> {
+  if (!user || !user.emailVerified || !user.email) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+  const docRef = doc(db, COLLECTIONS.ACCESOS_GOOGLE, user.uid);
+  const path = `${COLLECTIONS.ACCESOS_GOOGLE}/${user.uid}`;
+  const nowIso = new Date().toISOString();
+  const origen = typeof window !== 'undefined' ? window.location.origin : 'desconocido';
+  const nombreGoogle = (user.displayName || user.email.split('@')[0] || 'Usuario Google').slice(0, 150);
+  const eventoNuevo: AccesoGoogleEvento = {
+    fecha_iso: nowIso,
+    origen: origen.slice(0, 200),
+    metodo
+  };
+
+  let opType: OperationType = OperationType.WRITE;
+  try {
+    const snap = await getDocFromServer(docRef);
+    if (!snap.exists()) {
+      opType = OperationType.CREATE;
+      const createPayload = sanitizeForFirestore({
+        uid: user.uid,
+        email: user.email.toLowerCase(),
+        nombre_google: nombreGoogle,
+        ...(user.photoURL ? { foto_url: user.photoURL.slice(0, 500) } : {}),
+        es_admin: isAdminFlag,
+        primer_acceso: nowIso,
+        ultimo_acceso: nowIso,
+        total_accesos: 1,
+        ultimo_origen: origen.slice(0, 250),
+        historial_reciente: [eventoNuevo],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      await setDoc(docRef, createPayload);
+    } else {
+      opType = OperationType.UPDATE;
+      const existingData = snap.data() as Partial<AccesoGoogle> & { createdAt?: unknown };
+      const prevHist = Array.isArray(existingData.historial_reciente)
+        ? existingData.historial_reciente
+        : [];
+      const nextHist = [eventoNuevo, ...prevHist].slice(0, 10);
+      const prevTotal = typeof existingData.total_accesos === 'number' ? existingData.total_accesos : 1;
+
+      const updatePayload = sanitizeForFirestore({
+        uid: existingData.uid || user.uid,
+        email: existingData.email || user.email.toLowerCase(),
+        nombre_google: nombreGoogle,
+        ...(user.photoURL ? { foto_url: user.photoURL.slice(0, 500) } : existingData.foto_url ? { foto_url: existingData.foto_url } : {}),
+        es_admin: isAdminFlag,
+        primer_acceso: existingData.primer_acceso || nowIso,
+        ultimo_acceso: nowIso,
+        total_accesos: prevTotal + 1,
+        ultimo_origen: origen.slice(0, 250),
+        historial_reciente: nextHist,
+        createdAt: existingData.createdAt ?? serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      await setDoc(docRef, updatePayload);
+    }
+  } catch (error) {
+    handleFirestoreError(error, opType, path);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Real-Time Online Database Subscriptions (onSnapshot)
 // ---------------------------------------------------------------------
 
@@ -786,6 +855,7 @@ export interface AppDbCallbacks {
   onFichas: (dict: Record<string, FichaAcademiaReq>) => void;
   onOficio: (oficio: OficioCircular | null) => void;
   onDocentes: (list: DocenteAutorizado[]) => void;
+  onAccesosGoogle: (list: AccesoGoogle[]) => void;
   onError: (err: Error) => void;
 }
 
@@ -816,6 +886,7 @@ export function subscribeAppDatabase(
           const data = d.data() as Estudiante;
           return {
             ...data,
+            turno: 'MATUTINO' as const,
             num_control: data.num_control || d.id
           };
         });
@@ -913,8 +984,21 @@ export function subscribeAppDatabase(
         err => handleListenerErr(COLLECTIONS.DOCENTES, err)
       )
     );
+    unsubs.push(
+      onSnapshot(
+        collection(db, COLLECTIONS.ACCESOS_GOOGLE),
+        snap => {
+          const list = snap.docs
+            .map(d => d.data() as AccesoGoogle)
+            .sort((a, b) => (b.ultimo_acceso || '').localeCompare(a.ultimo_acceso || ''));
+          callbacks.onAccesosGoogle(list);
+        },
+        err => handleListenerErr(COLLECTIONS.ACCESOS_GOOGLE, err)
+      )
+    );
   } else {
     callbacks.onDocentes([]);
+    callbacks.onAccesosGoogle([]);
   }
 
   return () => {

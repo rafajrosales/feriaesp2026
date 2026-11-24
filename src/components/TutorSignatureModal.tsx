@@ -209,7 +209,7 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
             </div>
             <div>
               <span className="text-[10px] uppercase text-stone-400 font-bold block">Grupo y Turno:</span>
-              <span className="font-semibold text-stone-800">{estudiante.grupo} ({estudiante.turno})</span>
+              <span className="font-semibold text-stone-800">{estudiante.grupo} · Turno Matutino</span>
             </div>
             <div>
               <span className="text-[10px] uppercase text-stone-400 font-bold block">Plantel:</span>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Estudiante, TutorLegal } from '../types';
+import { Estudiante, TutorLegal, GRUPOS_PRIMER_SEMESTRE } from '../types';
 import { registrarNuevoEstudiante, validarCURP } from '../services/storage';
 import { cloudCheckCurpAvailable, cloudCheckNumControlAvailable, hasVerifiedFirebaseUser } from '../services/firebase';
 import { UserPlus, Mail, Phone, Check, X, Shield, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react';
@@ -22,7 +22,6 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
   const [numControl, setNumControl] = useState('');
   const [curp, setCurp] = useState('');
   const [grupo, setGrupo] = useState('1°A');
-  const [turno, setTurno] = useState<'MATUTINO' | 'VESPERTINO'>('MATUTINO');
   const [telefonoAlumno, setTelefonoAlumno] = useState('');
 
   const [nombreTutor, setNombreTutor] = useState('');
@@ -41,7 +40,6 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
     setNumControl(`2631607001${randomSuffix}`);
     setCurp(`SACM090714HDFRLA${randomSuffix.toString().slice(0, 2)}`);
     setGrupo('1°B');
-    setTurno('MATUTINO');
     setTelefonoAlumno('55 4321 8765');
     setNombreTutor('Lic. Roberto Sánchez Morales');
     setParentesco('Padre');
@@ -125,7 +123,7 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
       num_control: numControl.trim(),
       nombre_completo: nombreCompleto.trim(),
       grupo,
-      turno,
+      turno: 'MATUTINO',
       curp: curp.trim().toUpperCase(),
       correo_institucional: `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${numControl.slice(-4)}@cetis7.edu.mx`,
       telefono_alumno: telefonoAlumno.trim(),
@@ -271,37 +269,14 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
               </div>
 
               <div>
-                <label className="font-bold text-stone-800 block mb-1.5">Turno Asignado *</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTurno('MATUTINO')}
-                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                      turno === 'MATUTINO'
-                        ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs'
-                        : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
-                    }`}
-                  >
-                    <span>☀️ Matutino</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTurno('VESPERTINO')}
-                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                      turno === 'VESPERTINO'
-                        ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs'
-                        : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
-                    }`}
-                  >
-                    <span>🌙 Vespertino</span>
-                  </button>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="font-bold text-stone-800 block">Grupo (1.° Semestre) *</label>
+                  <span className="text-[11px] font-semibold text-[#721B32] bg-[#721B32]/10 px-2 py-0.5 rounded">
+                    Turno Único Matutino
+                  </span>
                 </div>
-              </div>
-
-              <div>
-                <label className="font-bold text-stone-800 block mb-1.5">Grupo (1.° Semestre) *</label>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                  {['1°A', '1°B', '1°C', '1°D', '1°E', '1°F'].map(g => (
+                <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                  {GRUPOS_PRIMER_SEMESTRE.map(g => (
                     <button
                       key={g}
                       type="button"

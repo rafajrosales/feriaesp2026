@@ -10,7 +10,18 @@ import {
   subscribeDbStore,
   getDbStoreSnapshot
 } from '../services/storage';
-import { SpecialtyId, FichaAcademiaReq, OficioCircular, DocenteAutorizado, Estudiante, ItemGaleriaAlumno, ReactivoExamen, EvaluacionVocacional } from '../types';
+import {
+  SpecialtyId,
+  FichaAcademiaReq,
+  OficioCircular,
+  DocenteAutorizado,
+  Estudiante,
+  ItemGaleriaAlumno,
+  ReactivoExamen,
+  EvaluacionVocacional,
+  GRUPOS_PRIMER_SEMESTRE
+} from '../types';
+import { BOOTSTRAPPED_ADMIN_EMAIL } from '../services/firebase';
 import { parseEmbedMediaUrl } from '../utils/media';
 import { FICHAS_ACADEMIA_DEFAULT } from '../data/mockData';
 import { deriveVocationalMetrics } from '../utils/vocationalMetrics';
@@ -42,14 +53,16 @@ import {
   Check,
   Video,
   Plus,
-  Film
+  Film,
+  Globe,
+  Clock
 } from 'lucide-react';
 import { MatriculaDashboard } from './MatriculaDashboard';
 
 export const AcademicDirection: React.FC = () => {
   const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
 
-  const [subTab, setSubTab] = useState<'tablero' | 'ficha' | 'circular' | 'padron' | 'docentes'>('tablero');
+  const [subTab, setSubTab] = useState<'tablero' | 'ficha' | 'circular' | 'padron' | 'docentes' | 'accesos'>('tablero');
   const [selectedAcademia, setSelectedAcademia] = useState<SpecialtyId>('programacion');
   
   // Drafts layered on top of reactive Firestore store
@@ -64,11 +77,14 @@ export const AcademicDirection: React.FC = () => {
   const [confirmResetReactivos, setConfirmResetReactivos] = useState<boolean>(false);
   const [confirmDeleteDocenteId, setConfirmDeleteDocenteId] = useState<string | null>(null);
 
-  // Filters for padrón estudiantil
+  // Filters for padrón estudiantil (Turno Único Matutino)
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterTurno, setFilterTurno] = useState<string>('TODOS');
   const [filterGrupo, setFilterGrupo] = useState<string>('TODOS');
   const [filterTutor, setFilterTutor] = useState<string>('TODOS');
+
+  // Filters for Google Access Log
+  const [searchAccesos, setSearchAccesos] = useState('');
+  const [filterAccesosOrigen, setFilterAccesosOrigen] = useState<'TODOS' | 'VERCEL' | 'AISTUDIO' | 'ADMIN'>('TODOS');
 
   // Docentes state & management
   const docentes = dbSnapshot.docentes;
@@ -430,7 +446,7 @@ export const AcademicDirection: React.FC = () => {
         `"${e.num_control}"`,
         `"${e.nombre_completo}"`,
         `"${e.grupo}"`,
-        `"${e.turno}"`,
+        `"MATUTINO"`,
         `"${e.tutor?.nombre_tutor || 'No asignado'}"`,
         `"${e.tutor?.correo_tutor || 'No asignado'}"`,
         `"${e.tutor?.verificado ? 'SI (FIRMADO)' : 'NO (PENDIENTE)'}"`,
@@ -456,6 +472,38 @@ export const AcademicDirection: React.FC = () => {
     document.body.removeChild(link);
   };
 
+  const handleExportCSVAccesosGoogle = () => {
+    const headers = [
+      'UID',
+      'Correo_Google',
+      'Nombre_Google',
+      'Rol_Plataforma',
+      'Total_Accesos',
+      'Primer_Acceso_ISO',
+      'Ultimo_Acceso_ISO',
+      'Ultimo_Origen'
+    ];
+    const rows = dbSnapshot.accesosGoogle.map(acc => [
+      `"${acc.uid}"`,
+      `"${acc.email}"`,
+      `"${(acc.nombre_google || '').replace(/"/g, '""')}"`,
+      `"${acc.es_admin ? `ADMIN UNICO (${BOOTSTRAPPED_ADMIN_EMAIL})` : 'Usuario Google'}"`,
+      `"${acc.total_accesos}"`,
+      `"${acc.primer_acceso}"`,
+      `"${acc.ultimo_acceso}"`,
+      `"${acc.ultimo_origen}"`
+    ].join(','));
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `CETis7_Accesos_Google_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleOpenModalReinicio = () => {
     setModoInicialRespaldo('reiniciar');
     setMostrarModalRespaldo(true);
@@ -466,16 +514,32 @@ export const AcademicDirection: React.FC = () => {
     setMostrarModalRespaldo(true);
   };
 
-  // Filter students for padrón
+  // Filter students for padrón (Turno Único Matutino)
   const filteredEstudiantes = estudiantes.filter(e => {
     const matchesSearch = e.nombre_completo.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           e.num_control.includes(searchQuery);
-    const matchesTurno = filterTurno === 'TODOS' || e.turno === filterTurno;
     const matchesGrupo = filterGrupo === 'TODOS' || e.grupo === filterGrupo;
     const matchesTutor = filterTutor === 'TODOS' || 
                          (filterTutor === 'VERIFICADOS' && e.tutor?.verificado) ||
                          (filterTutor === 'PENDIENTES' && !e.tutor?.verificado);
-    return matchesSearch && matchesTurno && matchesGrupo && matchesTutor;
+    return matchesSearch && matchesGrupo && matchesTutor;
+  });
+
+  const filteredAccesosGoogle = dbSnapshot.accesosGoogle.filter(acc => {
+    const q = searchAccesos.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      acc.email.toLowerCase().includes(q) ||
+      (acc.nombre_google || '').toLowerCase().includes(q) ||
+      acc.uid.toLowerCase().includes(q) ||
+      (acc.ultimo_origen || '').toLowerCase().includes(q);
+    const origen = (acc.ultimo_origen || '').toLowerCase();
+    const matchesOrigen =
+      filterAccesosOrigen === 'TODOS' ||
+      (filterAccesosOrigen === 'VERCEL' && origen.includes('vercel.app')) ||
+      (filterAccesosOrigen === 'AISTUDIO' && !origen.includes('vercel.app')) ||
+      (filterAccesosOrigen === 'ADMIN' && acc.es_admin);
+    return matchesSearch && matchesOrigen;
   });
 
   return (
@@ -564,6 +628,15 @@ export const AcademicDirection: React.FC = () => {
           >
             <UserCheck className="w-3.5 h-3.5" />
             5. Padrón Docentes Autorizados ({docentes.filter(d => d.estatus_autorizacion === 'AUTORIZADO').length})
+          </button>
+          <button
+            onClick={() => setSubTab('accesos')}
+            className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+              subTab === 'accesos' ? 'bg-[#721B32] text-white font-semibold' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            6. Accesos Google ({dbSnapshot.accesosGoogle.length})
           </button>
         </div>
       </div>
@@ -1474,7 +1547,7 @@ export const AcademicDirection: React.FC = () => {
         <div className="space-y-4">
           {/* Filters Bar */}
           <div className="no-print bg-white p-4 rounded-xl border border-stone-200 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <input
                 type="text"
                 placeholder="Buscar por nombre o Núm. Control..."
@@ -1482,26 +1555,20 @@ export const AcademicDirection: React.FC = () => {
                 onChange={e => setSearchQuery(e.target.value)}
                 className="px-3 py-1.5 text-xs border border-stone-300 rounded-lg w-full sm:w-64 bg-stone-50 focus:bg-white"
               />
-              <select
-                value={filterTurno}
-                onChange={e => setFilterTurno(e.target.value)}
-                className="px-2.5 py-1.5 text-xs border border-stone-300 rounded-lg bg-stone-50"
-              >
-                <option value="TODOS">Todos los Turnos</option>
-                <option value="MATUTINO">Matutino</option>
-                <option value="VESPERTINO">Vespertino</option>
-              </select>
+              <span className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-50 text-amber-900 border border-amber-200 whitespace-nowrap">
+                Turno Matutino
+              </span>
               <select
                 value={filterGrupo}
                 onChange={e => setFilterGrupo(e.target.value)}
-                className="px-2.5 py-1.5 text-xs border border-stone-300 rounded-lg bg-stone-50"
+                className="px-2.5 py-1.5 text-xs border border-stone-300 rounded-lg bg-stone-50 font-mono-code"
               >
-                <option value="TODOS">Todos los Grupos</option>
-                <option value="1°A">1°A</option>
-                <option value="1°B">1°B</option>
-                <option value="1°C">1°C</option>
-                <option value="1°D">1°D</option>
-                <option value="1°E">1°E</option>
+                <option value="TODOS">Todos los Grupos (1°A - 1°H)</option>
+                {GRUPOS_PRIMER_SEMESTRE.map(grupo => (
+                  <option key={grupo} value={grupo}>
+                    {grupo}
+                  </option>
+                ))}
               </select>
               <select
                 value={filterTutor}
@@ -1554,7 +1621,7 @@ export const AcademicDirection: React.FC = () => {
                   <tr>
                     <th className="p-3">Núm. Control</th>
                     <th className="p-3">Estudiante</th>
-                    <th className="p-3">Grupo / Turno</th>
+                    <th className="p-3">Grupo (Matutino)</th>
                     <th className="p-3">Tutor Legal & Firma</th>
                     <th className="p-3">Avance (100%)</th>
                     <th className="p-3">Token Generado</th>
@@ -1577,7 +1644,7 @@ export const AcademicDirection: React.FC = () => {
                             <div className="text-[10px] text-stone-500 font-mono-code">Tel: {est.telefono_alumno}</div>
                           )}
                         </td>
-                        <td className="p-3 text-stone-600 font-mono-code">{est.grupo} · {est.turno[0]}</td>
+                        <td className="p-3 text-stone-600 font-mono-code">{est.grupo} · Matutino</td>
                         <td className="p-3">
                           <div className="font-medium text-stone-900">{est.tutor?.nombre_tutor || 'No asignado'}</div>
                           <div className="font-mono-code text-[11px] text-stone-500">{est.tutor?.correo_tutor || 'Sin correo'}</div>
@@ -2152,6 +2219,228 @@ export const AcademicDirection: React.FC = () => {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Subtab 6: Registro en Línea de Cuentas Google Autenticadas */}
+      {subTab === 'accesos' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-xl border border-stone-200 p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-200 pb-4">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-semibold text-[#721B32] uppercase tracking-wider mb-0.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Auditoría en Tiempo Real · Firebase Firestore</span>
+                </div>
+                <h4 className="text-base sm:text-lg font-bold text-stone-900">
+                  Bitácora de Cuentas Autenticadas con Google
+                </h4>
+                <p className="text-xs text-stone-600 mt-0.5">
+                  Registra cada cuenta de Google que ingresa en Google AI Studio o en <span className="font-mono-code font-semibold">feriac7.vercel.app</span>.
+                  El permiso de administrador para realizar cambios es exclusivo de{' '}
+                  <strong className="font-mono-code text-[#721B32]">{BOOTSTRAPPED_ADMIN_EMAIL}</strong>.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleExportCSVAccesosGoogle}
+                className="px-3 py-2 text-xs font-semibold text-stone-700 bg-stone-100 hover:bg-stone-200 border border-stone-300 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Exportar Bitácora (.CSV)</span>
+              </button>
+            </div>
+
+            {!dbSnapshot.isAdmin ? (
+              <div className="p-5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-3">
+                <Lock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block font-bold text-sm">Acceso Restringido al Administrador Único</strong>
+                  <p className="mt-1">
+                    Por seguridad en las reglas de Firestore, la bitácora completa de cuentas Google autenticadas solo puede consultarse iniciando sesión con{' '}
+                    <span className="font-mono-code font-bold">{BOOTSTRAPPED_ADMIN_EMAIL}</span>.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* KPI Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="p-3.5 bg-stone-50 rounded-xl border border-stone-200">
+                    <div className="text-[11px] uppercase tracking-wider text-stone-500 font-semibold">
+                      Cuentas Google Registradas
+                    </div>
+                    <div className="text-2xl font-bold font-mono-code text-stone-900 mt-1">
+                      {dbSnapshot.accesosGoogle.length}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-blue-50 rounded-xl border border-blue-200">
+                    <div className="text-[11px] uppercase tracking-wider text-blue-800 font-semibold">
+                      Total Inicios Registrados
+                    </div>
+                    <div className="text-2xl font-bold font-mono-code text-blue-900 mt-1">
+                      {dbSnapshot.accesosGoogle.reduce((sum, acc) => sum + (acc.total_accesos || 0), 0)}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200">
+                    <div className="text-[11px] uppercase tracking-wider text-emerald-800 font-semibold">
+                      Desde feriac7.vercel.app
+                    </div>
+                    <div className="text-2xl font-bold font-mono-code text-emerald-900 mt-1">
+                      {dbSnapshot.accesosGoogle.filter(a => (a.ultimo_origen || '').toLowerCase().includes('vercel.app')).length}
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 bg-[#721B32]/5 rounded-xl border border-[#721B32]/20">
+                    <div className="text-[11px] uppercase tracking-wider text-[#721B32] font-semibold">
+                      Administrador Único
+                    </div>
+                    <div className="text-xs font-bold font-mono-code text-[#721B32] mt-2 truncate" title={BOOTSTRAPPED_ADMIN_EMAIL}>
+                      {BOOTSTRAPPED_ADMIN_EMAIL}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Search & Origin Filter */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                    <input
+                      type="text"
+                      value={searchAccesos}
+                      onChange={e => setSearchAccesos(e.target.value)}
+                      placeholder="Buscar por correo Gmail, nombre o UID..."
+                      className="w-full pl-8 pr-3 py-1.5 text-xs border border-stone-300 rounded-lg bg-stone-50 focus:bg-white"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={filterAccesosOrigen}
+                      onChange={e => setFilterAccesosOrigen(e.target.value as 'TODOS' | 'VERCEL' | 'AISTUDIO' | 'ADMIN')}
+                      className="px-2.5 py-1.5 text-xs border border-stone-300 rounded-lg bg-stone-50"
+                    >
+                      <option value="TODOS">Todos los orígenes</option>
+                      <option value="VERCEL">Solo feriac7.vercel.app</option>
+                      <option value="AISTUDIO">Solo Google AI Studio / Otros</option>
+                      <option value="ADMIN">Solo Administrador Único</option>
+                    </select>
+                    <span className="text-xs font-mono-code text-stone-500 whitespace-nowrap">
+                      {filteredAccesosGoogle.length} cuentas
+                    </span>
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div className="border border-stone-200 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-stone-50 border-b border-stone-200 text-stone-600 uppercase text-[10px] tracking-wider font-semibold">
+                        <tr>
+                          <th className="p-3">Usuario Google</th>
+                          <th className="p-3">Correo Electrónico</th>
+                          <th className="p-3">Rol</th>
+                          <th className="p-3">Accesos</th>
+                          <th className="p-3">Último Ingreso</th>
+                          <th className="p-3">Origen / Historial Reciente</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-200">
+                        {filteredAccesosGoogle.map(acc => (
+                          <tr key={acc.uid} className="hover:bg-stone-50/60 transition-colors">
+                            <td className="p-3">
+                              <div className="flex items-center gap-2.5">
+                                {acc.foto_url ? (
+                                  <img
+                                    src={acc.foto_url}
+                                    alt={acc.nombre_google}
+                                    referrerPolicy="no-referrer"
+                                    className="w-8 h-8 rounded-full border border-stone-200 shrink-0 object-cover"
+                                  />
+                                ) : (
+                                  <div className="w-8 h-8 rounded-full bg-stone-200 text-stone-700 font-bold flex items-center justify-center shrink-0">
+                                    {(acc.nombre_google || acc.email || '?')[0].toUpperCase()}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-stone-900 truncate max-w-[180px]">
+                                    {acc.nombre_google || 'Sin nombre'}
+                                  </div>
+                                  <div className="text-[10px] font-mono-code text-stone-400 truncate max-w-[180px]" title={acc.uid}>
+                                    UID: {acc.uid.slice(0, 12)}...
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-3 font-mono-code text-stone-800">{acc.email}</td>
+                            <td className="p-3">
+                              {acc.es_admin ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-[#721B32] text-white">
+                                  <ShieldCheck className="w-3 h-3 text-amber-300" />
+                                  ADMIN ÚNICO
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-stone-100 text-stone-700 border border-stone-200">
+                                  Usuario Google
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 font-mono-code font-bold text-stone-900">
+                              {acc.total_accesos}
+                            </td>
+                            <td className="p-3 text-[11px] text-stone-700">
+                              <div className="flex items-center gap-1 font-mono-code">
+                                <Clock className="w-3 h-3 text-stone-400" />
+                                <span>{new Date(acc.ultimo_acceso).toLocaleString('es-MX')}</span>
+                              </div>
+                              <div className="text-[10px] text-stone-400 font-mono-code mt-0.5">
+                                1.°: {new Date(acc.primer_acceso).toLocaleDateString('es-MX')}
+                              </div>
+                            </td>
+                            <td className="p-3">
+                              <div className="text-[11px] font-mono-code text-stone-800 truncate max-w-[240px]" title={acc.ultimo_origen}>
+                                {acc.ultimo_origen || 'web'}
+                              </div>
+                              {acc.historial_reciente && acc.historial_reciente.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {acc.historial_reciente.slice(-3).reverse().map((ev, i) => (
+                                    <span
+                                      key={i}
+                                      className="text-[9px] font-mono-code px-1.5 py-0.5 rounded bg-stone-100 border border-stone-200 text-stone-600"
+                                      title={`${ev.metodo} · ${ev.origen}`}
+                                    >
+                                      {ev.metodo === 'login_interactivo' ? 'Login' : 'Sesión'} ·{' '}
+                                      {new Date(ev.fecha_iso).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredAccesosGoogle.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-8 text-center text-stone-500">
+                              <div className="max-w-sm mx-auto space-y-1.5">
+                                <Globe className="w-8 h-8 text-stone-300 mx-auto" />
+                                <div className="font-bold text-stone-700 text-sm">
+                                  Sin registros de acceso coincidentes
+                                </div>
+                                <p className="text-xs text-stone-500">
+                                  Cada usuario que inicie sesión con su cuenta Google quedará registrado automáticamente aquí en tiempo real.
+                                </p>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

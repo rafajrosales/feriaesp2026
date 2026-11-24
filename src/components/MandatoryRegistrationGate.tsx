@@ -1,5 +1,5 @@
 import React, { useState, useSyncExternalStore } from 'react';
-import { Estudiante, TutorLegal } from '../types';
+import { Estudiante, TutorLegal, GRUPOS_PRIMER_SEMESTRE } from '../types';
 import {
   getDbStoreSnapshot,
   subscribeDbStore,
@@ -65,7 +65,6 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
   const [curp, setCurp] = useState('');
   const [numControl, setNumControl] = useState('');
   const [grupo, setGrupo] = useState('1°A');
-  const [turno, setTurno] = useState<'MATUTINO' | 'VESPERTINO'>('MATUTINO');
   const [telefonoAlumno, setTelefonoAlumno] = useState('');
 
   const [nombreTutor, setNombreTutor] = useState('');
@@ -100,7 +99,6 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
     setCurp(`${initials}090815HDFRLA${randomSuffix.toString().slice(0, 2)}`);
     setNumControl(`2631607001${randomSuffix}`);
     setGrupo('1°C');
-    setTurno('MATUTINO');
     setTelefonoAlumno('55 3456 7890');
     setNombreTutor('Lic. Juan Manuel Soto');
     setParentesco('Padre');
@@ -197,7 +195,7 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
       num_control: numControl.trim(),
       nombre_completo: nombreCompleto.trim(),
       grupo,
-      turno,
+      turno: 'MATUTINO',
       curp: curp.trim().toUpperCase(),
       correo_institucional: `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${numControl.trim().slice(-4)}@cetis7.edu.mx`,
       telefono_alumno: telefonoAlumno.trim(),
@@ -665,37 +663,16 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-stone-800 mb-1.5">Turno Asignado *</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setTurno('MATUTINO')}
-                          className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            turno === 'MATUTINO'
-                              ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs'
-                              : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
-                          }`}
-                        >
-                          <span>☀️ Matutino</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTurno('VESPERTINO')}
-                          className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            turno === 'VESPERTINO'
-                              ? 'bg-[#721B32] text-white border-[#721B32] shadow-xs'
-                              : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
-                          }`}
-                        >
-                          <span>🌙 Vespertino</span>
-                        </button>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-stone-800">
+                          Grupo de 1.° Semestre *
+                        </label>
+                        <span className="text-[11px] font-semibold text-[#721B32] bg-[#721B32]/10 px-2 py-0.5 rounded">
+                          Turno Único Matutino
+                        </span>
                       </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-stone-800 mb-1.5">Grupo de 1.° Semestre *</label>
-                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                        {['1°A', '1°B', '1°C', '1°D', '1°E', '1°F'].map(g => (
+                      <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                        {GRUPOS_PRIMER_SEMESTRE.map(g => (
                           <button
                             key={g}
                             type="button"
@@ -926,7 +903,7 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
                     Autenticación de Dirección Académica
                   </h3>
                   <p className="text-xs text-stone-600 leading-relaxed">
-                    El módulo directivo está protegido mediante Google Auth y reglas de seguridad en Cloud Firestore. Solo cuentas administrativas autorizadas pueden ingresar.
+                    El módulo directivo está protegido mediante Google Auth y reglas de seguridad en Cloud Firestore. La única cuenta administradora autorizada para cambios es <strong>rafajrosales@gmail.com</strong>.
                   </p>
                 </div>
 

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useSyncExternalStore } from 'react';
-import { SpecialtyId } from '../types';
+import { SpecialtyId, GRUPOS_PRIMER_SEMESTRE } from '../types';
 import { TEST_VOCACIONAL_PARTES } from '../data/mockData';
 import { 
   getProgresoVirtual, 
@@ -33,7 +33,6 @@ import {
 export const MatriculaDashboard: React.FC = () => {
   const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
 
-  const [selectedTurno, setSelectedTurno] = useState<string>('TODOS');
   const [selectedGrupo, setSelectedGrupo] = useState<string>('TODOS');
   const [activeChartMode, setActiveChartMode] = useState<'ambos' | 'vocacional' | 'especialidades'>('ambos');
   const [syncingBD, setSyncingBD] = useState<boolean>(false);
@@ -56,14 +55,12 @@ export const MatriculaDashboard: React.FC = () => {
 
   const todosEstudiantes = dbSnapshot.estudiantes;
 
-  // Filter students based on selection
+  // Filter students based on selection (Turno Único Matutino)
   const estudiantesFiltrados = useMemo(() => {
     return todosEstudiantes.filter(est => {
-      const matchTurno = selectedTurno === 'TODOS' || est.turno === selectedTurno;
-      const matchGrupo = selectedGrupo === 'TODOS' || est.grupo === selectedGrupo;
-      return matchTurno && matchGrupo;
+      return selectedGrupo === 'TODOS' || est.grupo === selectedGrupo;
     });
-  }, [todosEstudiantes, selectedTurno, selectedGrupo]);
+  }, [todosEstudiantes, selectedGrupo]);
 
   const totalMatricula = estudiantesFiltrados.length;
 
@@ -95,8 +92,8 @@ export const MatriculaDashboard: React.FC = () => {
       cosmetologia: { nombre: 'Cosmetología', color: '#be185d', quizEvaluados: 0, compMucho: 0, compRegular: 0, compPoco: 0, compNada: 0, sumaCalificaciones: 0, finalizadosConSugerida: 0 }
     };
 
-    // By group breakdown
-    const gruposList = ['1°A', '1°B', '1°C', '1°D', '1°E', '1°F'];
+    // By group breakdown (1°A a 1°H)
+    const gruposList = [...GRUPOS_PRIMER_SEMESTRE];
     const gruposStats: Record<string, { total: number; testCompletados: number; virtualFinalizados: number; tutoresVerificados: number }> = {};
     gruposList.forEach(g => {
       gruposStats[g] = { total: 0, testCompletados: 0, virtualFinalizados: 0, tutoresVerificados: 0 };
@@ -336,30 +333,22 @@ export const MatriculaDashboard: React.FC = () => {
               <span>Filtros:</span>
             </div>
 
-            {/* Turno Filter */}
-            <select
-              value={selectedTurno}
-              onChange={e => setSelectedTurno(e.target.value)}
-              className="px-2.5 py-1.5 text-xs font-medium border border-stone-300 rounded-lg bg-stone-50 text-stone-800 focus:bg-white focus:outline-none"
-            >
-              <option value="TODOS">Todos los Turnos</option>
-              <option value="MATUTINO">Turno Matutino</option>
-              <option value="VESPERTINO">Turno Vespertino</option>
-            </select>
+            <span className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-amber-50 text-amber-900 border border-amber-200">
+              Turno Único: Matutino
+            </span>
 
-            {/* Grupo Filter */}
+            {/* Grupo Filter (1°A - 1°H) */}
             <select
               value={selectedGrupo}
               onChange={e => setSelectedGrupo(e.target.value)}
               className="px-2.5 py-1.5 text-xs font-medium border border-stone-300 rounded-lg bg-stone-50 text-stone-800 focus:bg-white focus:outline-none font-mono-code"
             >
-              <option value="TODOS">Todos los Grupos</option>
-              <option value="1°A">Grupo 1°A</option>
-              <option value="1°B">Grupo 1°B</option>
-              <option value="1°C">Grupo 1°C</option>
-              <option value="1°D">Grupo 1°D</option>
-              <option value="1°E">Grupo 1°E</option>
-              <option value="1°F">Grupo 1°F</option>
+              <option value="TODOS">Todos los Grupos (1°A - 1°H)</option>
+              {GRUPOS_PRIMER_SEMESTRE.map(grupo => (
+                <option key={grupo} value={grupo}>
+                  Grupo {grupo}
+                </option>
+              ))}
             </select>
 
             {/* Chart Mode view buttons */}
@@ -403,7 +392,7 @@ export const MatriculaDashboard: React.FC = () => {
               {totalMatricula} <span className="text-xs font-normal text-stone-500">alumnos</span>
             </div>
             <div className="text-[11px] text-stone-500 mt-0.5 font-mono-code">
-              Turno: {selectedTurno} · {selectedGrupo}
+              Matutino · {selectedGrupo}
             </div>
           </div>
 
@@ -498,7 +487,7 @@ export const MatriculaDashboard: React.FC = () => {
               <div className="bg-stone-50/60 p-4 rounded-xl border border-stone-200">
                 <div className="flex items-center justify-between text-xs mb-2">
                   <span className="font-bold text-stone-800">
-                    Progreso Global de Aplicación ({selectedTurno} · {selectedGrupo})
+                    Progreso Global de Aplicación (Turno Matutino · {selectedGrupo})
                   </span>
                   <span className="font-mono-code font-bold text-[#721B32] text-sm">
                     {metrics.testCompletados} de {totalMatricula} ({metrics.pctTest}%)
@@ -609,7 +598,7 @@ export const MatriculaDashboard: React.FC = () => {
                 </div>
               </div>
 
-              {/* Bar Chart 1B: Desglose Comparativo por Grupo (1°A a 1°F) */}
+              {/* Bar Chart 1B: Desglose Comparativo por Grupo (1°A a 1°H) */}
               <div className="space-y-3 pt-2">
                 <span className="text-xs uppercase tracking-wider text-stone-500 font-semibold block">
                   Desglose Comparativo de Cobertura Vocacional por Grupo Escolar

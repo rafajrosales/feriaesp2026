@@ -11,13 +11,15 @@ import {
   getDbStoreSnapshot,
   connectOnlineDatabase,
   disconnectOnlineDatabase,
+  registrarAccesoGoogleEnNube,
   SesionUsuario
 } from './services/storage';
 import {
   onFirebaseAuthChange,
   signInWithGooglePopup,
   signOutFirebase,
-  checkIsFirebaseAdmin
+  checkIsFirebaseAdmin,
+  FIREBASE_PROJECT_ID
 } from './services/firebase';
 import type { User } from 'firebase/auth';
 import { Estudiante, ProgresoVirtual, EvaluacionVocacional } from './types';
@@ -91,6 +93,7 @@ export default function App() {
             setSesionActivaState(null);
           }
           await connectOnlineDatabase(user, adminFlag);
+          void registrarAccesoGoogleEnNube(user, adminFlag, 'sesion_activa');
         })();
       } else {
         setIsGoogleAdmin(false);
@@ -116,7 +119,12 @@ export default function App() {
     setSyncActionError(null);
     try {
       const user = await signInWithGooglePopup();
-      if (!user) return;
+      if (!user) {
+        setAuthError(
+          'No se completó el acceso con Google (la ventana emergente se cerró o fue cancelada). Intenta nuevamente y selecciona tu cuenta.'
+        );
+        return;
+      }
       if (!user.emailVerified) {
         setAuthError('Tu cuenta de Google no tiene correo verificado. Verifica tu correo para continuar.');
         return;
@@ -125,6 +133,7 @@ export default function App() {
       const adminFlag = await checkIsFirebaseAdmin(user);
       setIsGoogleAdmin(adminFlag);
       await connectOnlineDatabase(user, adminFlag);
+      void registrarAccesoGoogleEnNube(user, adminFlag, 'login_interactivo');
 
       if (!getSesionActiva()) {
         if (adminFlag) {
@@ -146,10 +155,17 @@ export default function App() {
       }
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code;
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
       if (code === 'auth/popup-blocked') {
-        setAuthError('El navegador bloqueó la ventana de Google. Permite ventanas emergentes (popups) e intenta de nuevo.');
+        setAuthError('El navegador bloqueó la ventana emergente de Google. Permite ventanas emergentes (popups) para este sitio e intenta de nuevo.');
       } else if (code === 'auth/unauthorized-domain') {
-        setAuthError('Este dominio aún no está autorizado en Firebase Auth. Agrégalo en Firebase Console -> Authentication -> Settings -> Authorized domains.');
+        setAuthError(
+          `El dominio "${currentHost}" no está autorizado en el proyecto Firebase activo "${FIREBASE_PROJECT_ID}". Agrégalo en Firebase Console -> Proyecto ${FIREBASE_PROJECT_ID} -> Authentication -> Configuración -> Dominios autorizados.`
+        );
+      } else if (code === 'auth/operation-not-allowed') {
+        setAuthError(
+          `El proveedor de Google Auth no está habilitado en el proyecto Firebase "${FIREBASE_PROJECT_ID}". Actívalo en Authentication -> Método de acceso -> Google.`
+        );
       } else {
         setAuthError(error instanceof Error ? error.message : 'No se pudo completar la autenticación con Google.');
       }

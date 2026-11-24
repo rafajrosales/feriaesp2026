@@ -107,5 +107,22 @@ export const DIRTY_DOZEN_SECURITY_CASES = [
     path: 'configuracion/oficio_circular',
     payload: { clave_oficio: 'FAKE-2026' },
     expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 13,
+    name: 'Non-admin list on accesos_google or es_admin escalation',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'list',
+    path: 'accesos_google',
+    expected: 'PERMISSION_DENIED'
+  },
+  {
+    id: 14,
+    name: 'Non-admin attempting es_admin=true on accesos_google/{uid}',
+    auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
+    operation: 'create',
+    path: 'accesos_google/student-uid-1',
+    payload: { uid: 'student-uid-1', email: 'alumno@gmail.com', es_admin: true },
+    expected: 'PERMISSION_DENIED'
   }
 ];

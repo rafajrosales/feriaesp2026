@@ -44,7 +44,7 @@ export const DigitalPassQR: React.FC<DigitalPassQRProps> = ({
         nc: estudiante.num_control,
         nom: estudiante.nombre_completo,
         grp: estudiante.grupo,
-        tur: estudiante.turno,
+        tur: 'MATUTINO',
         sug: evaluacion?.carrera_sugerida || 'programacion',
         tok: progreso.clave_unica_token,
         prom: progreso.promedio_cuestionarios,
@@ -292,7 +292,7 @@ export const DigitalPassQR: React.FC<DigitalPassQRProps> = ({
               </div>
               <div className="p-2 bg-stone-50 rounded-lg border border-stone-200">
                 <span className="text-[10px] uppercase text-stone-500 font-semibold block">Grupo / Turno:</span>
-                <span className="font-bold text-stone-800">{estudiante.grupo} · {estudiante.turno[0]}</span>
+                <span className="font-bold text-stone-800">{estudiante.grupo} · Matutino</span>
               </div>
             </div>
 
