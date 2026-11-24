@@ -305,7 +305,7 @@ export const AcademicDirection: React.FC = () => {
     }
 
     if (!nuevaClave.trim() || nuevaClave.trim().length < 4) {
-      setDocenteFormError('La clave de acceso o PIN personal debe tener al menos 4 caracteres.');
+      setDocenteFormError('El folio administrativo interno debe tener al menos 4 caracteres.');
       return;
     }
 
@@ -1732,7 +1732,7 @@ export const AcademicDirection: React.FC = () => {
                   Padrón de Docentes & Personal Autorizado
                 </h3>
                 <p className="text-xs text-stone-600">
-                  Gestión y registro de profesores autorizados por el Administrador para acceder al módulo de Dirección Académica del CETis No. 7.
+                  Catálogo interno de profesores por academia en el CETis No. 7 (el acceso administrativo a Dirección es exclusivo con cuenta Google autorizada).
                 </p>
               </div>
 
@@ -1789,7 +1789,7 @@ export const AcademicDirection: React.FC = () => {
                 <span className="text-xl font-black text-emerald-950 font-mono-code">
                   {docentes.filter(d => d.estatus_autorizacion === 'AUTORIZADO').length}
                 </span>
-                <span className="text-[10px] text-emerald-700 block mt-0.5">Pueden ver Dirección</span>
+                <span className="text-[10px] text-emerald-700 block mt-0.5">Activos en padrón</span>
               </div>
               <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200">
                 <span className="text-[10px] uppercase font-bold text-amber-900 block">Pendientes</span>
@@ -1935,7 +1935,7 @@ export const AcademicDirection: React.FC = () => {
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="font-bold text-stone-800">
-                        Clave de Acceso / PIN Personal <span className="text-red-600">*</span>
+                        Folio / Identificador Interno <span className="text-red-600">*</span>
                       </label>
                       <button
                         type="button"
@@ -1943,19 +1943,19 @@ export const AcademicDirection: React.FC = () => {
                         className="text-xs font-bold text-[#721B32] hover:text-[#501323] flex items-center gap-1 cursor-pointer"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                        Generar clave
+                        Generar folio
                       </button>
                     </div>
                     <input
                       type="text"
                       required
-                      placeholder="Ej. PROG2026 o DOC9812"
+                      placeholder="Ej. FOLIO-ACAD-01"
                       value={nuevaClave}
                       onChange={e => setNuevaClave(e.target.value.toUpperCase())}
                       className="w-full px-3.5 py-3 sm:py-2 text-base sm:text-xs font-mono-code font-bold tracking-wider border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none"
                     />
                     <span className="text-[10px] text-stone-400 mt-1 block">
-                      Clave única que usará el profesor para ingresar al módulo de Dirección.
+                      Identificador interno de registro (el acceso a Dirección opera únicamente con Google Auth administrador).
                     </span>
                   </div>
 
@@ -2063,7 +2063,7 @@ export const AcademicDirection: React.FC = () => {
                     <th className="p-3">RFC / ID</th>
                     <th className="p-3">Nombre del Profesor</th>
                     <th className="p-3">Academia & Rol</th>
-                    <th className="p-3">Clave / PIN de Acceso</th>
+                    <th className="p-3">Folio Interno</th>
                     <th className="p-3">Estatus Autorización</th>
                     <th className="p-3 text-right">Acciones de Administrador</th>
                   </tr>
@@ -2100,7 +2100,7 @@ export const AcademicDirection: React.FC = () => {
                               type="button"
                               onClick={() => setDocenteClaveVisibleId(isVisible ? null : doc.id)}
                               className="p-1 text-stone-400 hover:text-stone-700 rounded cursor-pointer"
-                              title={isVisible ? 'Ocultar clave' : 'Ver clave'}
+                              title={isVisible ? 'Ocultar folio' : 'Ver folio'}
                             >
                               {isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                             </button>
@@ -2108,7 +2108,7 @@ export const AcademicDirection: React.FC = () => {
                               type="button"
                               onClick={() => handleCopiarClave(doc.clave_acceso)}
                               className="p-1 text-stone-400 hover:text-stone-700 rounded cursor-pointer"
-                              title="Copiar clave"
+                              title="Copiar folio"
                             >
                               <Copy className="w-3.5 h-3.5" />
                             </button>

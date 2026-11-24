@@ -78,8 +78,8 @@ export const FAQ_DOCENTES: FaqItem[] = [
     id: 'doc-6',
     categoria: 'docente',
     etiqueta: 'Base de Datos & Nube',
-    pregunta: '¿Cómo se sincronizan los datos de los alumnos entre Firestore y almacenamiento local?',
-    respuesta: 'La plataforma implementa una arquitectura híbrida con Google Cloud Firestore y almacenamiento local persistente (Offline-First). Si se pierde la conexión a internet durante la feria, las respuestas y pases QR se guardan en el dispositivo y se replican automáticamente al restablecerse la red.'
+    pregunta: '¿Cómo se sincronizan los datos de los alumnos en la base de datos?',
+    respuesta: 'La plataforma trabaja 100% en línea conectada directamente a la base única de Google Cloud Firestore (sin modo offline ni almacenamiento local de registros), garantizando sincronización inmediata entre el portal web publicado y el tablero administrativo.'
   },
   {
     id: 'doc-7',
@@ -114,7 +114,7 @@ export const FAQ_DOCENTES: FaqItem[] = [
     categoria: 'docente',
     etiqueta: 'Gestión de Cohorte',
     pregunta: '¿Cómo se reinicia o restaura la cohorte de estudiantes para un nuevo periodo escolar?',
-    respuesta: 'Dentro de Subdirección Académica existe el botón de peligro "Reiniciar Cohorte / Padrón a Cero". Esta acción requiere confirmación con clave docente para depurar los registros del ciclo anterior e iniciar un nuevo proceso de admisión.'
+    respuesta: 'Dentro de Subdirección Académica existe el botón de peligro "Reiniciar Cohorte / Padrón a Cero". Esta acción está protegida y solo puede ejecutarla el administrador autorizado autenticado con Google (rafajrosales@gmail.com).'
   },
   {
     id: 'doc-12',
@@ -141,8 +141,8 @@ export const FAQ_DOCENTES: FaqItem[] = [
     id: 'doc-15',
     categoria: 'docente',
     etiqueta: 'Soporte Docente',
-    pregunta: '¿A quién acudir en caso de dudas sobre la clave de acceso o la gestión en plataforma?',
-    respuesta: 'Diríjase a la Subdirección Académica o al Departamento de Servicios Docentes del CETis No. 7. También puede ingresar mediante su cuenta institucional de Google autorizada o la clave administrativa vigente del plantel.'
+    pregunta: '¿Cómo se accede al módulo administrativo de Dirección Académica?',
+    respuesta: 'Por seguridad institucional, las claves y PINs maestros fueron deshabilitados. El acceso a Dirección Académica y cualquier modificación administrativa se realiza exclusivamente iniciando sesión con la cuenta de Google administradora autorizada (rafajrosales@gmail.com).'
   }
 ];
 

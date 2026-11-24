@@ -512,7 +512,7 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
                         <span>Reiniciar Solo Docentes (Conserva Alumnos Registrados)</span>
                       </div>
                       <p className="text-stone-600 mt-0.5">
-                        Restablece el catálogo de profesores a los 4 jefes de academia base (PROG2026, COM2026, RRHH2026, COSM2026), manteniendo los estudiantes y sus evaluaciones.
+                        Restablece el catálogo de profesores a los 4 jefes de academia base, manteniendo los estudiantes y sus evaluaciones.
                       </p>
                     </div>
                   </label>
