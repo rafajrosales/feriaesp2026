@@ -32,25 +32,13 @@ export const DigitalPassQR: React.FC<DigitalPassQRProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
   const [isTutorModalOpen, setIsTutorModalOpen] = useState<boolean>(false);
 
-  if (!estudiante) {
-    return (
-      <div className="bg-white rounded-2xl border border-stone-200 p-8 text-center space-y-4 shadow-xs">
-        <div className="w-16 h-16 rounded-2xl bg-stone-100 text-stone-600 flex items-center justify-center mx-auto">
-          <QrCode className="w-8 h-8" />
-        </div>
-        <h3 className="text-lg font-bold text-stone-900">Pase Digital QR no disponible</h3>
-        <p className="text-xs text-stone-600 max-w-md mx-auto">
-          No hay ningún alumno seleccionado o registrado en el sistema. Registra un nuevo alumno para generar su Pase QR.
-        </p>
-      </div>
-    );
-  }
-
-  const isVirtualCompleted = progreso.estatus_fase_virtual === 'COMPLETADO' && progreso.porcentaje_virtual >= 100;
-  const isTutorVerificado = Boolean(estudiante.tutor?.verificado);
+  const isVirtualCompleted = Boolean(
+    estudiante && progreso.estatus_fase_virtual === 'COMPLETADO' && progreso.porcentaje_virtual >= 100
+  );
+  const isTutorVerificado = Boolean(estudiante?.tutor?.verificado);
 
   useEffect(() => {
-    if (isVirtualCompleted && progreso.clave_unica_token && canvasRef.current) {
+    if (estudiante && isVirtualCompleted && progreso.clave_unica_token && canvasRef.current) {
       const qrData = JSON.stringify({
         plantel: 'CETIS_007',
         nc: estudiante.num_control,
@@ -65,7 +53,7 @@ export const DigitalPassQR: React.FC<DigitalPassQRProps> = ({
         correo_tutor: estudiante.tutor?.correo_tutor || 'sin_correo'
       });
 
-      QRCode.toCanvas(canvasRef.current, qrData, {
+      void QRCode.toCanvas(canvasRef.current, qrData, {
         width: 180,
         margin: 1,
         color: {
@@ -75,6 +63,20 @@ export const DigitalPassQR: React.FC<DigitalPassQRProps> = ({
       });
     }
   }, [isVirtualCompleted, progreso.clave_unica_token, estudiante, evaluacion, progreso.promedio_cuestionarios, isTutorVerificado]);
+
+  if (!estudiante) {
+    return (
+      <div className="bg-white rounded-2xl border border-stone-200 p-8 text-center space-y-4 shadow-xs">
+        <div className="w-16 h-16 rounded-2xl bg-stone-100 text-stone-600 flex items-center justify-center mx-auto">
+          <QrCode className="w-8 h-8" />
+        </div>
+        <h3 className="text-lg font-bold text-stone-900">Pase Digital QR no disponible</h3>
+        <p className="text-xs text-stone-600 max-w-md mx-auto">
+          No hay ningún alumno seleccionado o registrado en el sistema. Registra un nuevo alumno para generar su Pase QR.
+        </p>
+      </div>
+    );
+  }
 
   const handleCopyToken = () => {
     if (progreso.clave_unica_token) {

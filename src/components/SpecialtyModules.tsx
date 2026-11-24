@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { ESPECIALIDADES } from '../data/mockData';
-import { SpecialtyId, SpecialtyInfo, ProgresoVirtual, ItemGaleriaAlumno } from '../types';
+import { SpecialtyId, ProgresoVirtual, ProgresoEspecialidad, ItemGaleriaAlumno } from '../types';
 import { parseEmbedMediaUrl } from '../utils/media';
 import { getNivelComprension, resolveNivelComprension, COMPRENSION_META } from '../utils/comprension';
-import { SesionUsuario, getFichasAcademia } from '../services/storage';
+import { SesionUsuario, subscribeDbStore, getDbStoreSnapshot } from '../services/storage';
 import { 
   Code2, 
   Globe2, 
@@ -17,7 +17,6 @@ import {
   Award,
   Check,
   Zap,
-  MessageSquare,
   Video,
   Image as ImageIcon,
   Film,
@@ -35,7 +34,7 @@ import { COMIC_ASSETS } from '../assets/comicAssets';
 
 interface SpecialtyModulesProps {
   progreso: ProgresoVirtual;
-  onUpdateProgreso: (nuevoProgreso: ProgresoVirtual) => void;
+  onUpdateProgreso: (nuevoProgreso: ProgresoVirtual) => Promise<void> | void;
   sugeridaId?: SpecialtyId;
   onNavigateToDirection?: () => void;
   sesionActiva?: SesionUsuario | null;
@@ -48,6 +47,9 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
   onNavigateToDirection,
   sesionActiva
 }) => {
+  const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
+  const fichas = dbSnapshot.fichas;
+
   const [selectedId, setSelectedId] = useState<SpecialtyId>(sugeridaId || 'programacion');
   const [activeTab, setActiveTab] = useState<'curricular' | 'video' | 'proyectos' | 'quiz'>('curricular');
   
@@ -59,16 +61,25 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
   const [activeLightboxItem, setActiveLightboxItem] = useState<ItemGaleriaAlumno | null>(null);
   const [infografiaZoomOpen, setInfografiaZoomOpen] = useState<boolean>(false);
 
-  // Fichas de academia sincronizadas con el Banco de Reactivos (CRUD)
-  const [fichas, setFichas] = useState(() => getFichasAcademia());
-
-  useEffect(() => {
-    setFichas(getFichasAcademia());
-  }, [selectedId, activeTab]);
-
   const currentSpecialty = ESPECIALIDADES.find(s => s.id === selectedId) || ESPECIALIDADES[0];
   const currentFicha = fichas[selectedId];
   const currentProgress = progreso.progreso_especialidades[selectedId];
+  const canUpdateProgreso = sesionActiva?.tipo === 'docente' || progreso.estatus_fase_virtual !== 'COMPLETADO';
+
+  const cloneAndUpdateSpecialty = (patch: Partial<ProgresoEspecialidad>) => {
+    if (!canUpdateProgreso) return;
+    const updated: ProgresoVirtual = {
+      ...progreso,
+      progreso_especialidades: {
+        ...progreso.progreso_especialidades,
+        [selectedId]: {
+          ...progreso.progreso_especialidades[selectedId],
+          ...patch
+        }
+      }
+    };
+    void onUpdateProgreso(updated);
+  };
 
   const letraIdxMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3 };
 
@@ -107,22 +118,16 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
     
     // Automatically flag exploratory progress
     if (tab === 'curricular' && !currentProgress.infografia_explorada) {
-      const updated = { ...progreso };
-      updated.progreso_especialidades[selectedId].infografia_explorada = true;
-      onUpdateProgreso(updated);
+      cloneAndUpdateSpecialty({ infografia_explorada: true });
     } else if (tab === 'proyectos' && !currentProgress.proyectos_revisados) {
-      const updated = { ...progreso };
-      updated.progreso_especialidades[selectedId].proyectos_revisados = true;
-      onUpdateProgreso(updated);
+      cloneAndUpdateSpecialty({ proyectos_revisados: true });
     }
   };
 
   const handlePlayVideo = () => {
     setSimulatedVideoPlaying(true);
     setTimeout(() => {
-      const updated = { ...progreso };
-      updated.progreso_especialidades[selectedId].video_visto = true;
-      onUpdateProgreso(updated);
+      cloneAndUpdateSpecialty({ video_visto: true });
     }, 1500);
   };
 
@@ -145,17 +150,14 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
     const score = Math.round((correctCount / divisor) * 100);
     const nivelComprension = getNivelComprension(score);
 
-    const updated = { ...progreso };
-    updated.progreso_especialidades[selectedId] = {
-      ...updated.progreso_especialidades[selectedId],
+    cloneAndUpdateSpecialty({
       quiz_aprobado: true,
       calificacion_quiz: score,
       puntaje_obtenido: correctCount,
       puntaje_maximo: divisor,
       nivel_perfil: nivelComprension,
       respuestas_detalle: { ...quizAnswers }
-    };
-    onUpdateProgreso(updated);
+    });
     setQuizSubmitted(true);
   };
 
@@ -248,9 +250,9 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                 <span className="text-stone-300">·</span>
                 <span className="text-xs text-stone-500">Plan de Estudios DGETI 2026</span>
               </div>
-              <h2 className="text-xl font-bold text-stone-900">{currentSpecialty.nombre}</h2>
+              <h2 className="text-xl font-bold text-stone-900">{currentFicha?.nombre_especialidad || currentSpecialty.nombre}</h2>
               <p className="text-sm text-stone-600 mt-2 max-w-4xl leading-relaxed">
-                {currentSpecialty.resumen_ejecutivo}
+                {currentFicha?.resumen_ejecutivo || currentSpecialty.resumen_ejecutivo}
               </p>
             </div>
 
@@ -277,9 +279,7 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                   onClick={() => {
                     setInfografiaZoomOpen(true);
                     if (!currentProgress.infografia_explorada) {
-                      const updated = { ...progreso };
-                      updated.progreso_especialidades[selectedId].infografia_explorada = true;
-                      onUpdateProgreso(updated);
+                      cloneAndUpdateSpecialty({ infografia_explorada: true });
                     }
                   }}
                   className="w-full mt-1 px-2.5 py-1.5 bg-[#721B32] hover:bg-[#5b1528] text-white rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
@@ -632,9 +632,7 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                             allowFullScreen
                             onLoad={() => {
                               if (!currentProgress.video_visto) {
-                                const updated = { ...progreso };
-                                updated.progreso_especialidades[selectedId].video_visto = true;
-                                onUpdateProgreso(updated);
+                                cloneAndUpdateSpecialty({ video_visto: true });
                               }
                             }}
                           ></iframe>
@@ -647,9 +645,7 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                             className="w-full h-full object-contain bg-black"
                             onPlay={() => {
                               if (!currentProgress.video_visto) {
-                                const updated = { ...progreso };
-                                updated.progreso_especialidades[selectedId].video_visto = true;
-                                onUpdateProgreso(updated);
+                                cloneAndUpdateSpecialty({ video_visto: true });
                               }
                             }}
                           />

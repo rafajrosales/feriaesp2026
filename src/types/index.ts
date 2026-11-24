@@ -55,26 +55,15 @@ export interface DesglosePartesVocacional {
 
 export interface EvaluacionVocacional {
   num_control: string;
-  version_test?: '40_REACTIVOS_2026' | '8_REACTIVOS_LEGACY';
-  total_reactivos?: number;
-  score_aptitud_programacion: number;
-  score_gusto_programacion: number;
-  score_aptitud_comercio: number;
-  score_gusto_comercio: number;
-  score_aptitud_rrhh: number;
-  score_gusto_rrhh: number;
-  score_aptitud_cosmetologia: number;
-  score_gusto_cosmetologia: number;
-  puntajes_especialidad?: Record<SpecialtyId, number>;
-  porcentajes_especialidad?: Record<SpecialtyId, number>;
-  desglose_partes?: DesglosePartesVocacional;
-  respuestas_detalle?: Record<number, RespuestaVocacionalDetalle>;
-  especialidades_empatadas?: SpecialtyId[];
+  version_test: '40_REACTIVOS_2026' | '8_REACTIVOS_LEGACY';
+  total_reactivos: number;
+  desglose_partes: DesglosePartesVocacional;
+  respuestas: Record<string, LetraOpcionVocacional>;
+  especialidades_empatadas: SpecialtyId[];
   carrera_sugerida: SpecialtyId;
   segunda_opcion?: SpecialtyId;
   analisis_pedagogico: string;
   fecha_evaluacion: string;
-  sincronizado_firestore?: boolean;
   ownerUid?: string;
 }
 
@@ -188,19 +177,6 @@ export interface ReactivoExamen {
   aspecto_evaluado?: string;
 }
 
-export interface CuestionarioEspecialidad {
-  id: string;
-  especialidad_id: SpecialtyId;
-  titulo: string;
-  descripcion: string;
-  instrucciones?: string;
-  porcentaje_aprobatorio: number; // compatibilidad de esquema Firestore (sin umbral aprobatorio en vista de alumno)
-  tiempo_limite_min?: number;
-  activo: boolean;
-  fecha_actualizacion: string;
-  autor_docente?: string;
-  preguntas: ReactivoExamen[];
-}
 
 export interface FichaAcademiaReq {
   especialidad_id: SpecialtyId;
@@ -220,6 +196,7 @@ export interface FichaAcademiaReq {
 }
 
 export interface OficioCircular {
+  id?: string;
   clave_oficio: string;
   asunto: string;
   lugar_fecha: string;

@@ -58,11 +58,7 @@ export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
     setEvaluacionActual(evaluacionExistente);
     if (evaluacionExistente) {
       setPantalla('resultado');
-      setEstadoSyncBD(
-        evaluacionExistente.sincronizado_firestore !== undefined
-          ? { syncedToCloud: Boolean(evaluacionExistente.sincronizado_firestore) }
-          : null
-      );
+      setEstadoSyncBD({ syncedToCloud: true });
     } else {
       setRespuestas({});
       setParteActiva(1);
@@ -116,18 +112,19 @@ export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
     }
 
     setGuardandoBD(true);
+    setEstadoSyncBD(null);
     const resultado = evaluarTestVocacional40(numControl, respuestas);
     const syncRes = await guardarEvaluacionVocacionalEnBD(resultado);
-    const resultadoFinal: EvaluacionVocacional = {
-      ...resultado,
-      sincronizado_firestore: syncRes.syncedToCloud
-    };
-
     setGuardandoBD(false);
     setEstadoSyncBD(syncRes);
-    setEvaluacionActual(resultadoFinal);
+
+    if (!syncRes.syncedToCloud) {
+      return;
+    }
+
+    setEvaluacionActual(resultado);
     setPantalla('resultado');
-    onCompletar(resultadoFinal);
+    onCompletar(resultado);
   };
 
   const nombreEspecialidad = (id: SpecialtyId) => {
@@ -383,6 +380,16 @@ export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
             </div>
           )}
 
+          {estadoSyncBD && !estadoSyncBD.syncedToCloud && estadoSyncBD.error && (
+            <div className="p-3 bg-red-50 border border-red-300 rounded-lg text-xs text-red-900 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block">No se pudo guardar en la base única de Firebase:</strong>
+                <span>{estadoSyncBD.error}</span>
+              </div>
+            </div>
+          )}
+
           {/* Footer Navigation */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-stone-200">
             <div className="flex items-center gap-2">
@@ -437,12 +444,12 @@ export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
                 {guardandoBD ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Guardando Resultados en Base de Datos...
+                    Guardando Resultados en Firebase...
                   </>
                 ) : (
                   <>
                     <Database className="w-4 h-4" />
-                    Finalizar y Guardar Resultados en BD ({totalRespondidas}/40)
+                    Finalizar y Guardar Resultados en Firebase ({totalRespondidas}/40)
                   </>
                 )}
               </button>
@@ -486,14 +493,10 @@ export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
               <div className="text-emerald-800 bg-white px-3 py-1.5 rounded-md border border-emerald-200 shadow-2xs">
                 Núm. Control: <span className="font-mono-code font-semibold">{numControl}</span>
               </div>
-              {estadoSyncBD && (
-                <span className="text-[11px] font-mono-code text-emerald-700 flex items-center gap-1">
-                  <Database className="w-3 h-3" />
-                  {estadoSyncBD.syncedToCloud
-                    ? 'Sincronizado en Firestore Cloud'
-                    : 'Guardado localmente (pendiente de red)'}
-                </span>
-              )}
+              <span className="text-[11px] font-mono-code text-emerald-700 flex items-center gap-1">
+                <Database className="w-3 h-3" />
+                Sincronizado en Base Única Firebase
+              </span>
             </div>
           </div>
 

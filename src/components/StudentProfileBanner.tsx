@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import { Estudiante, ProgresoVirtual, EvaluacionVocacional } from '../types';
-import { getEstudiantes } from '../services/storage';
+import { getDbStoreSnapshot, subscribeDbStore } from '../services/storage';
 import { StudentSelfRegistrationModal } from './StudentSelfRegistrationModal';
 import { TutorSignatureModal } from './TutorSignatureModal';
 import { 
-  User, 
   QrCode, 
   ShieldCheck, 
   ChevronDown, 
@@ -38,12 +37,13 @@ export const StudentProfileBanner: React.FC<StudentProfileBannerProps> = ({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [modalSelfRegOpen, setModalSelfRegOpen] = useState(false);
   const [modalTutorSignOpen, setModalTutorSignOpen] = useState(false);
+  const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
 
   if (!estudiante) {
     return null;
   }
 
-  const todosEstudiantes = getEstudiantes();
+  const todosEstudiantes = dbSnapshot.estudiantes;
   const isTutorVerificado = Boolean(estudiante.tutor?.verificado);
   const especialidadesCompletas = (['programacion', 'comercio', 'rrhh', 'cosmetologia'] as const).filter(
     id => Boolean(progreso.progreso_especialidades[id]?.quiz_aprobado || (progreso.progreso_especialidades[id]?.puntaje_maximo ?? 0) > 0)

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useSyncExternalStore } from 'react';
 import { 
   X, 
   Download, 
@@ -7,26 +7,22 @@ import {
   ShieldAlert, 
   CheckCircle2, 
   AlertCircle, 
-  FileText, 
   Users, 
   GraduationCap, 
   School, 
   FileJson,
   Sparkles,
-  Info,
-  Clock,
-  ArrowRight
+  Info
 } from 'lucide-react';
 import { 
-  getEstudiantes, 
-  getDocentes, 
+  subscribeDbStore,
+  getDbStoreSnapshot,
   descargarRespaldoJSON, 
   restaurarDesdeRespaldoJSON, 
   reiniciarAlumnosYDocentes, 
   reiniciarSoloAlumnos, 
   reiniciarSoloDocentes,
-  RespaldoCompletoCETis7,
-  generarRespaldoCompleto
+  RespaldoCompletoCETis7
 } from '../services/storage';
 
 interface BackupAndResetModalProps {
@@ -42,12 +38,12 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
   onDataChanged,
   initialMode = 'respaldar'
 }) => {
+  const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
   const [activeTab, setActiveTab] = useState<'respaldar' | 'reiniciar' | 'restaurar'>(initialMode);
   
   // Reiniciar options
   const [resetScope, setResetScope] = useState<'todo' | 'alumnos' | 'docentes' | 'limpiar_todo'>('todo');
   const [autoBackupBeforeReset, setAutoBackupBeforeReset] = useState<boolean>(true);
-  const [confirmInput, setConfirmInput] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   
   // Feedback
@@ -60,8 +56,8 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
 
   if (!isOpen) return null;
 
-  const totalAlumnos = getEstudiantes().length;
-  const totalDocentes = getDocentes().length;
+  const totalAlumnos = dbSnapshot.estudiantes.length;
+  const totalDocentes = dbSnapshot.docentes.length;
 
   const handleDescargarRespaldoClick = () => {
     try {
@@ -79,7 +75,7 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
   };
 
   const handleExportCSVAlumnos = () => {
-    const estudiantes = getEstudiantes();
+    const estudiantes = dbSnapshot.estudiantes;
     const headers = ['Numero_Control', 'Nombre_Completo', 'CURP', 'Grupo', 'Turno', 'Telefono', 'Tutor_Nombre', 'Tutor_Correo', 'Tutor_Telefono', 'Tutor_Verificado'];
     const rows = estudiantes.map(e => [
       `"${e.num_control}"`,
@@ -104,8 +100,8 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
   };
 
   const handleExportCSVDocentes = () => {
-    const docentes = getDocentes();
-    const headers = ['ID', 'Nombre_Completo', 'RFC', 'Correo_Institucional', 'Academia', 'Rol', 'Clave_Acceso', 'Estatus', 'Fecha_Alta'];
+    const docentes = dbSnapshot.docentes;
+    const headers = ['ID', 'Nombre_Completo', 'RFC', 'Correo_Institucional', 'Academia', 'Rol', 'Estatus', 'Fecha_Alta'];
     const rows = docentes.map(d => [
       `"${d.id}"`,
       `"${d.nombre_completo}"`,
@@ -113,7 +109,6 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
       `"${d.correo_institucional}"`,
       `"${d.academia}"`,
       `"${d.rol}"`,
-      `"${d.clave_acceso}"`,
       `"${d.estatus_autorizacion}"`,
       `"${d.fecha_alta}"`
     ].join(','));
@@ -167,33 +162,43 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
     if (!archivoSeleccionado) return;
 
     setIsProcessing(true);
+    setStatusMessage(null);
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      const res = restaurarDesdeRespaldoJSON(text);
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const res = await restaurarDesdeRespaldoJSON(text);
 
-      setIsProcessing(false);
-      if (res.success) {
-        setStatusMessage({
-          type: 'success',
-          text: `¡Restauración exitosa! Se restauraron ${res.totalAlumnos} alumnos y ${res.totalDocentes} docentes.`
-        });
-        onDataChanged();
-        setTimeout(() => {
-          onClose();
-        }, 1500);
-      } else {
+        if (res.success) {
+          setStatusMessage({
+            type: 'success',
+            text: `¡Restauración exitosa en Firebase! Se restauraron ${res.totalAlumnos} alumnos y ${res.totalDocentes} docentes.`
+          });
+          onDataChanged();
+          setTimeout(() => {
+            onClose();
+          }, 1500);
+        } else {
+          setStatusMessage({
+            type: 'error',
+            text: res.mensaje
+          });
+        }
+      } catch (err: unknown) {
         setStatusMessage({
           type: 'error',
-          text: res.mensaje
+          text: err instanceof Error ? err.message : 'Error al restaurar respaldo en Firebase.'
         });
+      } finally {
+        setIsProcessing(false);
       }
     };
     reader.readAsText(archivoSeleccionado);
   };
 
-  const handleEjecutarReinicio = () => {
+  const handleEjecutarReinicio = async () => {
     setIsProcessing(true);
+    setStatusMessage(null);
 
     try {
       // Step 1: Automatic backup if checked
@@ -205,33 +210,33 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
         }
       }
 
-      // Step 2: Execute requested scope
+      // Step 2: Execute requested scope directly against Firebase Firestore
       if (resetScope === 'todo') {
-        reiniciarAlumnosYDocentes('iniciales');
+        await reiniciarAlumnosYDocentes('iniciales');
       } else if (resetScope === 'alumnos') {
-        reiniciarSoloAlumnos('iniciales');
+        await reiniciarSoloAlumnos('iniciales');
       } else if (resetScope === 'docentes') {
-        reiniciarSoloDocentes('iniciales');
+        await reiniciarSoloDocentes('iniciales');
       } else if (resetScope === 'limpiar_todo') {
-        reiniciarAlumnosYDocentes('limpiar');
+        await reiniciarAlumnosYDocentes('limpiar');
       }
 
-      setIsProcessing(false);
       setStatusMessage({
         type: 'success',
-        text: '¡El reinicio se ha completado correctamente! Los padrones han sido actualizados.'
+        text: '¡El reinicio se ha completado en Firebase Firestore! Los padrones han sido actualizados en línea.'
       });
       onDataChanged();
 
       setTimeout(() => {
         onClose();
       }, 1400);
-    } catch (err: any) {
-      setIsProcessing(false);
+    } catch (err: unknown) {
       setStatusMessage({
         type: 'error',
-        text: `Ocurrió un error al procesar el reinicio: ${err?.message || 'Error desconocido'}`
+        text: `Ocurrió un error al procesar el reinicio en Firebase: ${err instanceof Error ? err.message : 'Error desconocido'}`
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -411,7 +416,7 @@ export const BackupAndResetModal: React.FC<BackupAndResetModalProps> = ({
                         <Users className="w-4 h-4 text-emerald-700" />
                         <span>Padrón de Docentes (.CSV)</span>
                       </div>
-                      <div className="text-[11px] text-stone-500">Con RFC, academia, rol y PIN</div>
+                      <div className="text-[11px] text-stone-500">Con RFC, academia, rol y estatus</div>
                     </div>
                     <button
                       onClick={handleExportCSVDocentes}

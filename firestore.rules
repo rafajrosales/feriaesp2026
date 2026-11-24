@@ -46,6 +46,26 @@ service cloud.firestore {
       return val is string && val in ['programacion', 'comercio', 'rrhh', 'cosmetologia'];
     }
 
+    function isValidParteCounts(p) {
+      return p is map
+        && p.keys().hasAll(['programacion', 'comercio', 'rrhh', 'cosmetologia'])
+        && p.keys().hasOnly(['programacion', 'comercio', 'rrhh', 'cosmetologia'])
+        && p.programacion is number && p.programacion >= 0 && p.programacion <= 40
+        && p.comercio is number && p.comercio >= 0 && p.comercio <= 40
+        && p.rrhh is number && p.rrhh >= 0 && p.rrhh <= 40
+        && p.cosmetologia is number && p.cosmetologia >= 0 && p.cosmetologia <= 40;
+    }
+
+    function isValidDesglosePartes(dp) {
+      return dp is map
+        && dp.keys().hasAll(['parte1_intereses', 'parte2_actividades', 'parte3_habilidades', 'parte4_metas'])
+        && dp.keys().hasOnly(['parte1_intereses', 'parte2_actividades', 'parte3_habilidades', 'parte4_metas'])
+        && isValidParteCounts(dp.parte1_intereses)
+        && isValidParteCounts(dp.parte2_actividades)
+        && isValidParteCounts(dp.parte3_habilidades)
+        && isValidParteCounts(dp.parte4_metas);
+    }
+
     // -----------------------------------------------------------------
     // Validation Blueprints
     // -----------------------------------------------------------------
@@ -91,7 +111,7 @@ service cloud.firestore {
         && data.grupo is string && data.grupo.size() >= 1 && data.grupo.size() <= 20
         && data.turno is string && data.turno in ['MATUTINO', 'VESPERTINO']
         && data.correo_institucional is string && data.correo_institucional.size() >= 3 && data.correo_institucional.size() <= 150
-        && data.curp is string && data.curp.size() >= 10 && data.curp.size() <= 20
+        && isValidId(data.curp) && data.curp.size() >= 10 && data.curp.size() <= 20
         && (!('avatar_url' in data) || (data.avatar_url is string && data.avatar_url.size() <= 500))
         && (!('telefono_alumno' in data) || (data.telefono_alumno is string && data.telefono_alumno.size() <= 30))
         && isValidTutorLegal(data.tutor)
@@ -101,56 +121,46 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidCurpRegistry(data) {
+      return data.keys().hasAll(['curp', 'num_control', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['curp', 'num_control', 'ownerUid', 'createdAt', 'updatedAt'])
+        && isValidId(data.curp) && data.curp.size() >= 10 && data.curp.size() <= 20
+        && isValidId(data.num_control) && data.num_control.size() >= 4 && data.num_control.size() <= 64
+        && isValidId(data.ownerUid)
+        && (data.ownerUid == request.auth.uid || isAdmin())
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     function isValidEvaluacion(data) {
       return data.keys().hasAll([
-          'num_control', 'ownerUid',
-          'score_aptitud_programacion', 'score_gusto_programacion',
-          'score_aptitud_comercio', 'score_gusto_comercio',
-          'score_aptitud_rrhh', 'score_gusto_rrhh',
-          'score_aptitud_cosmetologia', 'score_gusto_cosmetologia',
+          'num_control', 'ownerUid', 'version_test', 'total_reactivos',
+          'desglose_partes', 'respuestas', 'especialidades_empatadas',
           'carrera_sugerida', 'analisis_pedagogico', 'fecha_evaluacion',
           'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
           'num_control', 'ownerUid', 'version_test', 'total_reactivos',
-          'score_aptitud_programacion', 'score_gusto_programacion',
-          'score_aptitud_comercio', 'score_gusto_comercio',
-          'score_aptitud_rrhh', 'score_gusto_rrhh',
-          'score_aptitud_cosmetologia', 'score_gusto_cosmetologia',
-          'puntajes_especialidad', 'porcentajes_especialidad', 'desglose_partes',
-          'respuestas_detalle', 'especialidades_empatadas',
+          'desglose_partes', 'respuestas', 'especialidades_empatadas',
           'carrera_sugerida', 'segunda_opcion', 'analisis_pedagogico',
-          'fecha_evaluacion', 'sincronizado_firestore', 'createdAt', 'updatedAt'
+          'fecha_evaluacion', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.num_control) && data.num_control.size() >= 4 && data.num_control.size() <= 64
         && isValidId(data.ownerUid)
         && (data.ownerUid == request.auth.uid || isAdmin())
-        && (!('version_test' in data) || (data.version_test is string && data.version_test in ['40_REACTIVOS_2026', '8_REACTIVOS_LEGACY']))
-        && (!('total_reactivos' in data) || (data.total_reactivos is number && data.total_reactivos >= 1 && data.total_reactivos <= 100))
-        && data.score_aptitud_programacion is number && data.score_aptitud_programacion >= 0 && data.score_aptitud_programacion <= 100
-        && data.score_gusto_programacion is number && data.score_gusto_programacion >= 0 && data.score_gusto_programacion <= 100
-        && data.score_aptitud_comercio is number && data.score_aptitud_comercio >= 0 && data.score_aptitud_comercio <= 100
-        && data.score_gusto_comercio is number && data.score_gusto_comercio >= 0 && data.score_gusto_comercio <= 100
-        && data.score_aptitud_rrhh is number && data.score_aptitud_rrhh >= 0 && data.score_aptitud_rrhh <= 100
-        && data.score_gusto_rrhh is number && data.score_gusto_rrhh >= 0 && data.score_gusto_rrhh <= 100
-        && data.score_aptitud_cosmetologia is number && data.score_aptitud_cosmetologia >= 0 && data.score_aptitud_cosmetologia <= 100
-        && data.score_gusto_cosmetologia is number && data.score_gusto_cosmetologia >= 0 && data.score_gusto_cosmetologia <= 100
-        && (!('puntajes_especialidad' in data) || data.puntajes_especialidad is map)
-        && (!('porcentajes_especialidad' in data) || data.porcentajes_especialidad is map)
-        && (!('desglose_partes' in data) || data.desglose_partes is map)
-        && (!('respuestas_detalle' in data) || data.respuestas_detalle is map)
-        && (!('especialidades_empatadas' in data) || (
-          data.especialidades_empatadas is list
-          && data.especialidades_empatadas.size() >= 1
-          && data.especialidades_empatadas.size() <= 4
-          && data.especialidades_empatadas[0] is string
-          && data.especialidades_empatadas[0].size() <= 32
-        ))
+        && data.version_test is string && data.version_test in ['40_REACTIVOS_2026', '8_REACTIVOS_LEGACY']
+        && data.total_reactivos is number && data.total_reactivos >= 1 && data.total_reactivos <= 100
+        && isValidDesglosePartes(data.desglose_partes)
+        && data.respuestas is map && data.respuestas.size() <= 45
+        && data.especialidades_empatadas is list
+        && data.especialidades_empatadas.size() >= 1
+        && data.especialidades_empatadas.size() <= 4
+        && data.especialidades_empatadas[0] is string
+        && data.especialidades_empatadas[0].size() <= 32
         && isValidSpecialty(data.carrera_sugerida)
         && (!('segunda_opcion' in data) || isValidSpecialty(data.segunda_opcion))
         && data.analisis_pedagogico is string && data.analisis_pedagogico.size() >= 1 && data.analisis_pedagogico.size() <= 2000
         && data.fecha_evaluacion is string && data.fecha_evaluacion.size() >= 4 && data.fecha_evaluacion.size() <= 64
-        && (!('sincronizado_firestore' in data) || data.sincronizado_firestore is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -205,33 +215,6 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidCuestionario(data) {
-      return data.keys().hasAll([
-          'id', 'especialidad_id', 'titulo', 'descripcion',
-          'porcentaje_aprobatorio', 'activo', 'fecha_actualizacion',
-          'preguntas', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'id', 'especialidad_id', 'titulo', 'descripcion', 'instrucciones',
-          'porcentaje_aprobatorio', 'tiempo_limite_min', 'activo',
-          'fecha_actualizacion', 'autor_docente', 'preguntas', 'createdAt', 'updatedAt'
-        ])
-        && isValidId(data.id) && data.id.size() >= 2 && data.id.size() <= 64
-        && isValidSpecialty(data.especialidad_id)
-        && data.titulo is string && data.titulo.size() >= 2 && data.titulo.size() <= 200
-        && data.descripcion is string && data.descripcion.size() >= 1 && data.descripcion.size() <= 1000
-        && (!('instrucciones' in data) || (data.instrucciones is string && data.instrucciones.size() <= 1000))
-        && data.porcentaje_aprobatorio is number && data.porcentaje_aprobatorio >= 0 && data.porcentaje_aprobatorio <= 100
-        && (!('tiempo_limite_min' in data) || (data.tiempo_limite_min is number && data.tiempo_limite_min >= 1 && data.tiempo_limite_min <= 300))
-        && data.activo is bool
-        && data.fecha_actualizacion is string && data.fecha_actualizacion.size() <= 64
-        && (!('autor_docente' in data) || (data.autor_docente is string && data.autor_docente.size() <= 150))
-        && data.preguntas is list && data.preguntas.size() <= 50
-        && (data.preguntas.size() == 0 || data.preguntas[0] is map)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
     function isValidFichaAcademia(data) {
       return data.keys().hasAll([
           'especialidad_id', 'nombre_especialidad', 'presidente_academia',
@@ -259,6 +242,31 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidOficioCircular(data) {
+      return data.keys().hasAll([
+          'id', 'clave_oficio', 'asunto', 'lugar_fecha', 'destinatarios',
+          'cuerpo', 'firmante_cargo', 'firmante_nombre', 'sello_oficial',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'clave_oficio', 'asunto', 'lugar_fecha', 'destinatarios',
+          'cuerpo', 'firmante_cargo', 'firmante_nombre', 'sello_oficial',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 2 && data.id.size() <= 64
+        && data.clave_oficio is string && data.clave_oficio.size() >= 2 && data.clave_oficio.size() <= 100
+        && data.asunto is string && data.asunto.size() >= 2 && data.asunto.size() <= 300
+        && data.lugar_fecha is string && data.lugar_fecha.size() >= 2 && data.lugar_fecha.size() <= 150
+        && data.destinatarios is string && data.destinatarios.size() >= 2 && data.destinatarios.size() <= 300
+        && data.cuerpo is list && data.cuerpo.size() >= 1 && data.cuerpo.size() <= 20
+        && data.cuerpo[0] is string && data.cuerpo[0].size() <= 2000
+        && data.firmante_cargo is string && data.firmante_cargo.size() >= 2 && data.firmante_cargo.size() <= 150
+        && data.firmante_nombre is string && data.firmante_nombre.size() >= 2 && data.firmante_nombre.size() <= 150
+        && data.sello_oficial is string && data.sello_oficial.size() >= 2 && data.sello_oficial.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // -----------------------------------------------------------------
     // Collection Rules
     // -----------------------------------------------------------------
@@ -282,7 +290,7 @@ service cloud.firestore {
     }
 
     match /estudiantes/{numControl} {
-      allow get: if isValidId(numControl) && (isOwner(existing().ownerUid) || isAdmin());
+      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin());
       allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
       allow create: if isValidId(numControl)
         && isVerifiedUser()
@@ -290,11 +298,15 @@ service cloud.firestore {
         && incoming().num_control == numControl
         && (incoming().ownerUid == request.auth.uid || isAdmin())
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
+        && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/curp_registry/$(incoming().curp))
+        && existsAfter(/databases/$(database)/documents/curp_registry/$(incoming().curp))
+        && getAfter(/databases/$(database)/documents/curp_registry/$(incoming().curp)).data.num_control == numControl;
       allow update: if isValidId(numControl)
         && isVerifiedUser()
         && isValidEstudiante(incoming())
         && incoming().num_control == existing().num_control
+        && incoming().curp == existing().curp
         && incoming().ownerUid == existing().ownerUid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
@@ -310,14 +322,36 @@ service cloud.firestore {
       allow delete: if isValidId(numControl) && isAdmin();
     }
 
+    match /curp_registry/{curp} {
+      allow get: if isValidId(curp) && isVerifiedUser();
+      allow list: if isAdmin();
+      allow create: if isValidId(curp)
+        && isVerifiedUser()
+        && isValidCurpRegistry(incoming())
+        && incoming().curp == curp
+        && (incoming().ownerUid == request.auth.uid || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/estudiantes/$(incoming().num_control))
+        && existsAfter(/databases/$(database)/documents/estudiantes/$(incoming().num_control))
+        && getAfter(/databases/$(database)/documents/estudiantes/$(incoming().num_control)).data.curp == curp;
+      allow update: if false;
+      allow delete: if isValidId(curp) && isAdmin();
+    }
+
     match /evaluaciones/{numControl} {
-      allow get: if isValidId(numControl) && (isOwner(existing().ownerUid) || isAdmin());
+      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin());
       allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
       allow create: if isValidId(numControl)
         && isVerifiedUser()
         && isValidEvaluacion(incoming())
         && incoming().num_control == numControl
-        && ((incoming().ownerUid == request.auth.uid && exists(/databases/$(database)/documents/estudiantes/$(numControl))) || isAdmin())
+        && (
+          (incoming().ownerUid == request.auth.uid && (
+            exists(/databases/$(database)/documents/estudiantes/$(numControl)) ||
+            existsAfter(/databases/$(database)/documents/estudiantes/$(numControl))
+          )) || isAdmin()
+        )
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(numControl)
@@ -333,14 +367,9 @@ service cloud.firestore {
             isOwner(existing().ownerUid)
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'version_test', 'total_reactivos',
-              'score_aptitud_programacion', 'score_gusto_programacion',
-              'score_aptitud_comercio', 'score_gusto_comercio',
-              'score_aptitud_rrhh', 'score_gusto_rrhh',
-              'score_aptitud_cosmetologia', 'score_gusto_cosmetologia',
-              'puntajes_especialidad', 'porcentajes_especialidad', 'desglose_partes',
-              'respuestas_detalle', 'especialidades_empatadas',
+              'desglose_partes', 'respuestas', 'especialidades_empatadas',
               'carrera_sugerida', 'segunda_opcion', 'analisis_pedagogico',
-              'fecha_evaluacion', 'sincronizado_firestore', 'updatedAt'
+              'fecha_evaluacion', 'updatedAt'
             ])
           )
         );
@@ -348,13 +377,18 @@ service cloud.firestore {
     }
 
     match /progresos/{numControl} {
-      allow get: if isValidId(numControl) && (isOwner(existing().ownerUid) || isAdmin());
+      allow get: if isValidId(numControl) && ((resource == null && isVerifiedUser()) || isOwner(existing().ownerUid) || isAdmin());
       allow list: if (isVerifiedUser() && resource.data.ownerUid == request.auth.uid) || isAdmin();
       allow create: if isValidId(numControl)
         && isVerifiedUser()
         && isValidProgreso(incoming())
         && incoming().num_control == numControl
-        && ((incoming().ownerUid == request.auth.uid && exists(/databases/$(database)/documents/estudiantes/$(numControl))) || isAdmin())
+        && (
+          (incoming().ownerUid == request.auth.uid && (
+            exists(/databases/$(database)/documents/estudiantes/$(numControl)) ||
+            existsAfter(/databases/$(database)/documents/estudiantes/$(numControl))
+          )) || isAdmin()
+        )
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(numControl)
@@ -402,29 +436,6 @@ service cloud.firestore {
       allow delete: if isValidId(docenteId) && isAdmin();
     }
 
-    match /cuestionarios_especialidades/{cuestionarioId} {
-      allow get: if isValidId(cuestionarioId) && isVerifiedUser();
-      allow list: if (isVerifiedUser() && resource.data.activo == true) || isAdmin();
-      allow create: if isValidId(cuestionarioId)
-        && isAdmin()
-        && isValidCuestionario(incoming())
-        && incoming().id == cuestionarioId
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isValidId(cuestionarioId)
-        && isAdmin()
-        && isValidCuestionario(incoming())
-        && incoming().id == existing().id
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly([
-          'especialidad_id', 'titulo', 'descripcion', 'instrucciones',
-          'porcentaje_aprobatorio', 'tiempo_limite_min', 'activo',
-          'fecha_actualizacion', 'autor_docente', 'preguntas', 'updatedAt'
-        ]);
-      allow delete: if isValidId(cuestionarioId) && isAdmin();
-    }
-
     match /fichas_academia/{especialidadId} {
       allow get: if isValidId(especialidadId) && isVerifiedUser();
       allow list: if (isVerifiedUser() && resource.data.especialidad_id in ['programacion', 'comercio', 'rrhh', 'cosmetologia']) || isAdmin();
@@ -443,9 +454,31 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'nombre_especialidad', 'presidente_academia', 'integrantes_academia',
           'fecha_entrega', 'resumen_ejecutivo', 'recursos_multimedia',
-          'banco_reactivos', 'reto_ludico', 'updatedAt'
+          'banco_reactivos', 'updatedAt'
         ]);
       allow delete: if isValidId(especialidadId) && isAdmin();
+    }
+
+    match /configuracion/{configId} {
+      allow get: if isValidId(configId) && isVerifiedUser();
+      allow list: if isAdmin();
+      allow create: if isValidId(configId)
+        && isAdmin()
+        && isValidOficioCircular(incoming())
+        && incoming().id == configId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(configId)
+        && isAdmin()
+        && isValidOficioCircular(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'clave_oficio', 'asunto', 'lugar_fecha', 'destinatarios',
+          'cuerpo', 'firmante_cargo', 'firmante_nombre', 'sello_oficial', 'updatedAt'
+        ]);
+      allow delete: if isValidId(configId) && isAdmin();
     }
   }
 }

@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { 
-  getEstudiantes, 
   getEstudianteActivoNC, 
   setEstudianteActivoNC, 
   getProgresoVirtual, 
   saveProgresoVirtual, 
-  getEvaluacionVocacional, 
-  saveEvaluacionVocacional,
   getSesionActiva,
   setSesionActiva,
   cerrarSesion,
-  sincronizarBaseDeDatosCETis7,
+  subscribeDbStore,
+  getDbStoreSnapshot,
+  connectOnlineDatabase,
+  disconnectOnlineDatabase,
   SesionUsuario
 } from './services/storage';
 import {
@@ -31,42 +31,50 @@ import { MandatoryRegistrationGate } from './components/MandatoryRegistrationGat
 import { WelcomeTutorialModal } from './components/WelcomeTutorialModal';
 import { DirectionAuthModal } from './components/DirectionAuthModal';
 import { HelpFaqModal } from './components/HelpFaqModal';
-import { Compass, BookOpen, QrCode, Building2, CheckCircle, ArrowRight, Sparkles, HelpCircle } from 'lucide-react';
+import { Compass, CheckCircle, ArrowRight, Sparkles, HelpCircle, WifiOff, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function App() {
+  const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
+
   const [activeTab, setActiveTab] = useState<MainNavTab>('vocacional');
   const [sesionActiva, setSesionActivaState] = useState<SesionUsuario | null>(() => getSesionActiva());
-  const [estudianteActivoNC, setEstudianteActivoNCState] = useState<string>(getEstudianteActivoNC());
+  const [estudianteActivoNC, setEstudianteActivoNCState] = useState<string>(() => getEstudianteActivoNC());
   const [mostrarTutorial, setMostrarTutorial] = useState<boolean>(false);
   const [mostrarModalDirAuth, setMostrarModalDirAuth] = useState<boolean>(false);
   const [mostrarHelpModal, setMostrarHelpModal] = useState<boolean>(false);
   const [helpDefaultTab, setHelpDefaultTab] = useState<'fundamentacion' | 'docentes' | 'alumnos'>('docentes');
 
-  const handleOpenHelp = (tab: 'fundamentacion' | 'docentes' | 'alumnos' = 'docentes') => {
-    setHelpDefaultTab(tab);
-    setMostrarHelpModal(true);
-  };
-  
-  // Dynamic student state
-  const estudiantes = getEstudiantes();
-  const estudianteActual = estudiantes.length > 0 
-    ? (estudiantes.find(e => e.num_control === estudianteActivoNC) || estudiantes[0])
-    : null;
-  
-  const [progresoActual, setProgresoActual] = useState<ProgresoVirtual>(() =>
-    estudianteActual ? getProgresoVirtual(estudianteActual.num_control) : getProgresoVirtual('')
-  );
-  const [evaluacionActual, setEvaluacionActual] = useState<EvaluacionVocacional | null>(() =>
-    estudianteActual ? getEvaluacionVocacional(estudianteActual.num_control) : null
-  );
-
-  const [dbSyncVersion, setDbSyncVersion] = useState(0);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [isGoogleAdmin, setIsGoogleAdmin] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [syncActionError, setSyncActionError] = useState<string | null>(null);
 
-  // Listen to Firebase Auth state and sync Firestore ONLY when verified user is signed in
+  const handleOpenHelp = (tab: 'fundamentacion' | 'docentes' | 'alumnos' = 'docentes') => {
+    setHelpDefaultTab(tab);
+    setMostrarHelpModal(true);
+  };
+
+  // Live reactive student state strictly from Firestore onSnapshot mirror
+  const estudiantes = dbSnapshot.estudiantes;
+  const estudianteActual = useMemo(() => {
+    if (estudiantes.length === 0) return null;
+    return estudiantes.find(e => e.num_control === estudianteActivoNC) || estudiantes[0];
+  }, [estudiantes, estudianteActivoNC]);
+
+  const progresoActual: ProgresoVirtual = useMemo(() => {
+    if (estudianteActual && dbSnapshot.progresos[estudianteActual.num_control]) {
+      return dbSnapshot.progresos[estudianteActual.num_control];
+    }
+    return getProgresoVirtual(estudianteActual?.num_control || '');
+  }, [estudianteActual?.num_control, dbSnapshot.progresos]);
+
+  const evaluacionActual: EvaluacionVocacional | null = useMemo(() => {
+    if (!estudianteActual) return null;
+    return dbSnapshot.evaluaciones[estudianteActual.num_control] || null;
+  }, [estudianteActual?.num_control, dbSnapshot.evaluaciones]);
+
+  // Listen to Firebase Auth state and connect online-only Firestore listeners
   useEffect(() => {
     let active = true;
     const unsubscribe = onFirebaseAuthChange(user => {
@@ -77,12 +85,18 @@ export default function App() {
           const adminFlag = await checkIsFirebaseAdmin(user);
           if (!active) return;
           setIsGoogleAdmin(adminFlag);
-          await sincronizarBaseDeDatosCETis7();
-          if (!active) return;
-          setDbSyncVersion(v => v + 1);
+          const currentSes = getSesionActiva();
+          if (currentSes?.tipo === 'docente' && !adminFlag) {
+            cerrarSesion();
+            setSesionActivaState(null);
+          }
+          await connectOnlineDatabase(user, adminFlag);
         })();
       } else {
         setIsGoogleAdmin(false);
+        disconnectOnlineDatabase();
+        cerrarSesion();
+        setSesionActivaState(null);
       }
     });
     return () => {
@@ -99,6 +113,7 @@ export default function App() {
   const handleGoogleSignIn = async () => {
     setAuthLoading(true);
     setAuthError(null);
+    setSyncActionError(null);
     try {
       const user = await signInWithGooglePopup();
       if (!user) return;
@@ -109,8 +124,7 @@ export default function App() {
 
       const adminFlag = await checkIsFirebaseAdmin(user);
       setIsGoogleAdmin(adminFlag);
-      await sincronizarBaseDeDatosCETis7();
-      setDbSyncVersion(v => v + 1);
+      await connectOnlineDatabase(user, adminFlag);
 
       if (!getSesionActiva()) {
         if (adminFlag) {
@@ -123,7 +137,8 @@ export default function App() {
           setActiveTab('direccion');
           setMostrarTutorial(false);
         } else {
-          const ownedStudents = getEstudiantes().filter(e => e.ownerUid === user.uid);
+          const snapshotNow = getDbStoreSnapshot();
+          const ownedStudents = snapshotNow.estudiantes.filter(e => e.ownerUid === user.uid);
           if (ownedStudents.length === 1) {
             handleAccessGranted(ownedStudents[0]);
           }
@@ -134,7 +149,7 @@ export default function App() {
       if (code === 'auth/popup-blocked') {
         setAuthError('El navegador bloqueó la ventana de Google. Permite ventanas emergentes (popups) e intenta de nuevo.');
       } else if (code === 'auth/unauthorized-domain') {
-        setAuthError('Este dominio aún no está autorizado en Firebase Auth; puedes ingresar usando la Clave Directivo o tu CURP.');
+        setAuthError('Este dominio aún no está autorizado en Firebase Auth. Agrégalo en Firebase Console -> Authentication -> Settings -> Authorized domains.');
       } else {
         setAuthError(error instanceof Error ? error.message : 'No se pudo completar la autenticación con Google.');
       }
@@ -154,53 +169,42 @@ export default function App() {
 
   const handleGoogleSignOut = async () => {
     await signOutFirebase();
+    disconnectOnlineDatabase();
+    cerrarSesion();
+    setSesionActivaState(null);
     setFirebaseUser(null);
     setIsGoogleAdmin(false);
     setAuthError(null);
+    setSyncActionError(null);
   };
 
-  // Sync state when cohort is reset, Firestore sync completes, or student switches
+  // If active session belongs to an alumno and Firestore finished loading with 0 alumnos, clear session
   useEffect(() => {
-    if (estudianteActual) {
-      setProgresoActual(getProgresoVirtual(estudianteActual.num_control));
-      setEvaluacionActual(getEvaluacionVocacional(estudianteActual.num_control));
-    } else {
-      setProgresoActual(getProgresoVirtual(''));
-      setEvaluacionActual(null);
-    }
-  }, [estudianteActivoNC, estudianteActual?.num_control, dbSyncVersion]);
-
-  // If active session belongs to an alumno but padron is at zero, clear session and return to gate
-  useEffect(() => {
-    if (sesionActiva?.tipo === 'alumno' && estudiantes.length === 0) {
+    if (dbSnapshot.ready && sesionActiva?.tipo === 'alumno' && estudiantes.length === 0) {
       cerrarSesion();
       setSesionActivaState(null);
     }
-  }, [sesionActiva?.tipo, estudiantes.length]);
+  }, [dbSnapshot.ready, sesionActiva?.tipo, estudiantes.length]);
 
-  // Sync state when student switches
   const handleCambiarEstudiante = (nc: string) => {
     if (!nc) return;
     setEstudianteActivoNC(nc);
     setEstudianteActivoNCState(nc);
-    setProgresoActual(getProgresoVirtual(nc));
-    setEvaluacionActual(getEvaluacionVocacional(nc));
   };
 
-  const handleUpdateProgreso = (nuevoProgreso: ProgresoVirtual) => {
-    saveProgresoVirtual(nuevoProgreso);
-    setProgresoActual({ ...nuevoProgreso });
-  };
-
-  const handleCompletarEvaluacionVocacional = (evaluacion: EvaluacionVocacional) => {
-    if (evaluacion.sincronizado_firestore === undefined) {
-      saveEvaluacionVocacional(evaluacion);
+  const handleUpdateProgreso = async (nuevoProgreso: ProgresoVirtual) => {
+    setSyncActionError(null);
+    const res = await saveProgresoVirtual(nuevoProgreso);
+    if (!res.success && res.error) {
+      setSyncActionError(res.error);
     }
-    setEvaluacionActual(evaluacion);
+  };
 
-    // update virtual progress
-    const updated = { ...progresoActual, test_vocacional_completado: true };
-    handleUpdateProgreso(updated);
+  const handleCompletarEvaluacionVocacional = async (_evaluacion: EvaluacionVocacional) => {
+    if (progresoActual.estatus_fase_virtual !== 'COMPLETADO' || isGoogleAdmin) {
+      const updated = { ...progresoActual, test_vocacional_completado: true };
+      await handleUpdateProgreso(updated);
+    }
   };
 
   const handleAccessGranted = (estudiante?: Estudiante, sesion?: SesionUsuario) => {
@@ -290,6 +294,32 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-8">
+        {/* Online-Only Firebase Connection / Error Status Banner */}
+        {(!dbSnapshot.online || dbSnapshot.syncError || syncActionError) && (
+          <div className="no-print mb-4 p-3.5 rounded-xl bg-red-50 border-2 border-red-300 text-red-950 flex items-start gap-2.5 text-xs shadow-xs">
+            {!dbSnapshot.online ? (
+              <WifiOff className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+            )}
+            <div className="flex-1">
+              <strong className="block font-bold">
+                {!dbSnapshot.online
+                  ? 'Sin conexión a Internet — Modo Offline Deshabilitado'
+                  : 'Error de sincronización con Base Única Firebase'}
+              </strong>
+              <span>{syncActionError || dbSnapshot.syncError || 'Conéctate a Internet para continuar trabajando en tiempo real con Firebase Firestore.'}</span>
+            </div>
+          </div>
+        )}
+
+        {firebaseUser?.emailVerified && dbSnapshot.loading && !dbSnapshot.ready && (
+          <div className="no-print mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 flex items-center gap-2 text-xs">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-700 shrink-0" />
+            <span>Cargando datos en tiempo real desde Firebase Firestore...</span>
+          </div>
+        )}
+
         {/* Institutional Welcome & Hero kicker */}
         <div className="no-print mb-6">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-3 border-b border-stone-200 pb-4">
@@ -361,12 +391,12 @@ export default function App() {
                 <div>
                   <h4 className="font-bold text-sm">Padrón de Alumnos Actualmente en Cero</h4>
                   <p className="text-xs text-amber-900/80">
-                    Se reinició el sistema a cero estudiantes. Puedes acudir a Dirección para dar de alta alumnos o restaurar el padrón del plantel.
+                    No hay alumnos registrados en este momento en la base única de Firebase. Puedes acudir a Dirección o registrar un alumno.
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setActiveTab('direccion')}
+                onClick={() => handleNavTabChange('direccion')}
                 className="px-3.5 py-2 text-xs font-bold text-white bg-[#721B32] hover:bg-[#5b1528] rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
               >
                 Ir a Dirección Académica
@@ -410,10 +440,10 @@ export default function App() {
               </div>
               <h3 className="text-lg font-bold text-stone-900">No hay alumno seleccionado</h3>
               <p className="text-xs text-stone-600 max-w-md mx-auto">
-                El test vocacional dual requiere un alumno registrado para guardar sus aptitudes e intereses.
+                El test vocacional dual requiere un alumno registrado para guardar sus aptitudes e intereses en Firebase.
               </p>
               <button
-                onClick={() => setActiveTab('direccion')}
+                onClick={() => handleNavTabChange('direccion')}
                 className="px-4 py-2 text-xs font-bold text-white bg-[#721B32] hover:bg-[#5b1528] rounded-xl cursor-pointer"
               >
                 Abrir Dirección Académica
@@ -467,7 +497,7 @@ export default function App() {
         )}
 
         {/* TAB 4: Dirección & Subdirección Académica */}
-        {activeTab === 'direccion' && (
+        {activeTab === 'direccion' && isGoogleAdmin && (
           <AcademicDirection />
         )}
       </main>
@@ -505,11 +535,17 @@ export default function App() {
         nombreEstudiante={estudianteActual?.nombre_completo ? estudianteActual.nombre_completo.split(' ')[0] : 'Estudiante'}
       />
 
-      {/* Direction & Subdirection Password Authentication Modal */}
+      {/* Direction & Subdirection Google Admin Authentication Modal */}
       <DirectionAuthModal
         isOpen={mostrarModalDirAuth}
         onClose={() => setMostrarModalDirAuth(false)}
         onAuthSuccess={handleAuthDirSuccess}
+        firebaseUser={firebaseUser}
+        isGoogleAdmin={isGoogleAdmin}
+        onGoogleSignIn={handleGoogleSignIn}
+        onGoogleSignOut={handleGoogleSignOut}
+        authLoading={authLoading}
+        authError={authError}
       />
 
       {/* Help & FAQ Center Modal */}

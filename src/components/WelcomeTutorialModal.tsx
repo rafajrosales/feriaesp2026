@@ -43,7 +43,7 @@ export const WelcomeTutorialModal: React.FC<WelcomeTutorialModalProps> = ({
 
   const handleClose = () => {
     if (noVolverAMostrar) {
-      localStorage.setItem('cetis7_tutorial_visto', 'true');
+      window.sessionStorage.setItem('cetis7_tutorial_visto', 'true');
     }
     onClose();
     // Siempre asegurar llevar al registro si no está registrado
@@ -53,7 +53,7 @@ export const WelcomeTutorialModal: React.FC<WelcomeTutorialModalProps> = ({
   };
 
   const handleFinalizar = (tabDestino: MainNavTab = 'vocacional') => {
-    localStorage.setItem('cetis7_tutorial_visto', 'true');
+    window.sessionStorage.setItem('cetis7_tutorial_visto', 'true');
     onClose();
     // Siempre llevar al registro si no se ha registrado
     if (!isRegistered) {

@@ -1,14 +1,15 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Estudiante, ProgresoVirtual, EvaluacionVocacional, SpecialtyId } from '../types';
+import React, { useState, useMemo, useSyncExternalStore } from 'react';
+import { SpecialtyId } from '../types';
 import { TEST_VOCACIONAL_PARTES } from '../data/mockData';
 import { 
-  getEstudiantes, 
   getProgresoVirtual, 
-  getEvaluacionVocacional, 
   sincronizarBaseDeDatosCETis7,
+  subscribeDbStore,
+  getDbStoreSnapshot,
   ResultadoSyncBD
 } from '../services/storage';
 import { hasVerifiedFirebaseUser, signInWithGooglePopup } from '../services/firebase';
+import { deriveVocationalMetrics } from '../utils/vocationalMetrics';
 import { VocationalResultDetails } from './VocationalResultDetails';
 import { VocationalRadar } from './VocationalRadar';
 import { resolveNivelComprension, COMPRENSION_META } from '../utils/comprension';
@@ -17,12 +18,9 @@ import {
   CheckCircle2, 
   Clock, 
   Users, 
-  TrendingUp, 
   Filter, 
   Compass, 
-  Award,
   Layers,
-  ArrowUpRight,
   ShieldCheck,
   ClipboardCheck,
   Database,
@@ -33,10 +31,11 @@ import {
 } from 'lucide-react';
 
 export const MatriculaDashboard: React.FC = () => {
+  const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
+
   const [selectedTurno, setSelectedTurno] = useState<string>('TODOS');
   const [selectedGrupo, setSelectedGrupo] = useState<string>('TODOS');
   const [activeChartMode, setActiveChartMode] = useState<'ambos' | 'vocacional' | 'especialidades'>('ambos');
-  const [syncVersion, setSyncVersion] = useState<number>(0);
   const [syncingBD, setSyncingBD] = useState<boolean>(false);
   const [syncStatus, setSyncStatus] = useState<ResultadoSyncBD | null>(null);
   const [selectedStudentNC, setSelectedStudentNC] = useState<string>('');
@@ -50,17 +49,12 @@ export const MatriculaDashboard: React.FC = () => {
       }
       const res = await sincronizarBaseDeDatosCETis7();
       setSyncStatus(res);
-      setSyncVersion(v => v + 1);
     } finally {
       setSyncingBD(false);
     }
   };
 
-  useEffect(() => {
-    void handleSincronizarBD(false);
-  }, []);
-
-  const todosEstudiantes = useMemo(() => getEstudiantes(), [syncVersion]);
+  const todosEstudiantes = dbSnapshot.estudiantes;
 
   // Filter students based on selection
   const estudiantesFiltrados = useMemo(() => {
@@ -135,8 +129,8 @@ export const MatriculaDashboard: React.FC = () => {
     };
 
     estudiantesFiltrados.forEach(est => {
-      const prog = getProgresoVirtual(est.num_control);
-      const evalVoc = getEvaluacionVocacional(est.num_control);
+      const prog = dbSnapshot.progresos[est.num_control] || getProgresoVirtual(est.num_control);
+      const evalVoc = dbSnapshot.evaluaciones[est.num_control] || null;
 
       // Tutor verification check
       const hasTutorVerified = est.tutor?.verificado === true;
@@ -205,12 +199,7 @@ export const MatriculaDashboard: React.FC = () => {
         if (evalVoc.carrera_sugerida) {
           voc40Sugeridas[evalVoc.carrera_sugerida]++;
         }
-        const ptsMap: Record<SpecialtyId, number> = evalVoc.puntajes_especialidad || {
-          programacion: Math.round(((evalVoc.score_aptitud_programacion + evalVoc.score_gusto_programacion) / 200) * 40),
-          rrhh: Math.round(((evalVoc.score_aptitud_rrhh + evalVoc.score_gusto_rrhh) / 200) * 40),
-          comercio: Math.round(((evalVoc.score_aptitud_comercio + evalVoc.score_gusto_comercio) / 200) * 40),
-          cosmetologia: Math.round(((evalVoc.score_aptitud_cosmetologia + evalVoc.score_gusto_cosmetologia) / 200) * 40)
-        };
+        const ptsMap = deriveVocationalMetrics(evalVoc).puntajes;
         careers.forEach(c => {
           voc40SumaPuntajes[c] += ptsMap[c] || 0;
         });
@@ -283,7 +272,7 @@ export const MatriculaDashboard: React.FC = () => {
         { label: 'Consentimiento & Firma de Tutor (Constancia Imprimible)', count: tutoresVerificados, pct: pctTutores, color: 'bg-indigo-600' }
       ]
     };
-  }, [estudiantesFiltrados, totalMatricula, syncVersion]);
+  }, [estudiantesFiltrados, totalMatricula, dbSnapshot.progresos, dbSnapshot.evaluaciones]);
 
   // Max value for bar chart scaling
   const maxBarValue = Math.max(
@@ -302,20 +291,18 @@ export const MatriculaDashboard: React.FC = () => {
               <span className="text-xs font-bold text-[#721B32] uppercase tracking-wider">Tablero de Control Académico</span>
               <span className="text-stone-300">·</span>
               <span className="text-xs text-stone-500 font-mono-code">DGETI · CETis No. 7</span>
-              {syncStatus && (
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono-code font-semibold border ${
-                  syncStatus.connected && !syncStatus.error
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                    : 'bg-amber-50 text-amber-800 border-amber-200'
-                }`}>
-                  <Database className="w-3 h-3" />
-                  {syncStatus.connected && !syncStatus.error
-                    ? `BD Firestore Activa (${syncStatus.evaluacionesCount} eval.)`
-                    : syncStatus.requiresAuth
-                    ? 'Modo Local (Conecta Google para Nube)'
-                    : 'Modo Local (sin enlace nube)'}
-                </span>
-              )}
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono-code font-semibold border ${
+                dbSnapshot.connected && dbSnapshot.online && !dbSnapshot.syncError
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-red-50 text-red-800 border-red-200'
+              }`}>
+                <Database className="w-3 h-3" />
+                {dbSnapshot.connected && dbSnapshot.online && !dbSnapshot.syncError
+                  ? `Base Única Firebase En Línea (${Object.keys(dbSnapshot.evaluaciones).length} eval.)`
+                  : syncStatus?.requiresAuth
+                  ? 'Requiere Google Auth para Firestore'
+                  : 'Sin enlace a Firebase Firestore'}
+              </span>
             </div>
             <h3 className="text-lg font-bold text-stone-900 mt-0.5">
               Progreso General de la Matrícula Estudiantil
@@ -698,7 +685,7 @@ export const MatriculaDashboard: React.FC = () => {
                         est.num_control.includes(searchIndividual)
                     )
                     .map(est => {
-                      const ev = getEvaluacionVocacional(est.num_control);
+                      const ev = dbSnapshot.evaluaciones[est.num_control] || null;
                       return (
                         <option key={est.num_control} value={est.num_control}>
                           {est.nombre_completo} ({est.grupo}) ·{' '}
@@ -713,7 +700,7 @@ export const MatriculaDashboard: React.FC = () => {
             {(() => {
               const targetStudent =
                 estudiantesFiltrados.find(e => e.num_control === selectedStudentNC) ||
-                estudiantesFiltrados.find(e => Boolean(getEvaluacionVocacional(e.num_control))) ||
+                estudiantesFiltrados.find(e => Boolean(dbSnapshot.evaluaciones[e.num_control])) ||
                 estudiantesFiltrados[0];
 
               if (!targetStudent) {
@@ -724,7 +711,7 @@ export const MatriculaDashboard: React.FC = () => {
                 );
               }
 
-              const targetEval = getEvaluacionVocacional(targetStudent.num_control);
+              const targetEval = dbSnapshot.evaluaciones[targetStudent.num_control] || null;
 
               return (
                 <div className="space-y-4">
@@ -740,7 +727,7 @@ export const MatriculaDashboard: React.FC = () => {
                       .slice(0, 12)
                       .map(est => {
                         const isSelected = targetStudent.num_control === est.num_control;
-                        const ev = getEvaluacionVocacional(est.num_control);
+                        const ev = dbSnapshot.evaluaciones[est.num_control] || null;
                         return (
                           <button
                             key={est.num_control}

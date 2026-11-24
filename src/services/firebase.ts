@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
   initializeFirestore,
+  memoryLocalCache,
   Firestore,
   collection,
   doc,
@@ -13,6 +14,8 @@ import {
   query,
   where,
   serverTimestamp,
+  writeBatch,
+  onSnapshot,
   DocumentReference
 } from 'firebase/firestore';
 import {
@@ -29,19 +32,24 @@ import {
   EvaluacionVocacional,
   ProgresoVirtual,
   DocenteAutorizado,
-  CuestionarioEspecialidad,
-  FichaAcademiaReq
+  FichaAcademiaReq,
+  OficioCircular
 } from '../types';
+import {
+  normalizeEvaluacionFromFirestore,
+  toNormalizedEvaluacionPayload
+} from '../utils/vocationalMetrics';
 
-// Initialize Firebase App
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 function createFirestoreInstance(): Firestore {
   const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
   try {
+    // 100% online memoryLocalCache (no IndexedDB offline persistence)
     return initializeFirestore(
       app,
       {
+        localCache: memoryLocalCache(),
         ...(typeof window !== 'undefined'
           ? {
               experimentalAutoDetectLongPolling: true,
@@ -64,15 +72,17 @@ export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'rafajrosales@gmail.com';
+export const CONFIG_OFICIO_ID = 'oficio_circular';
 
 export const COLLECTIONS = {
   ADMINS: 'admins',
   ESTUDIANTES: 'estudiantes',
+  CURP_REGISTRY: 'curp_registry',
   DOCENTES: 'docentes',
   EVALUACIONES: 'evaluaciones',
   PROGRESOS: 'progresos',
-  CUESTIONARIOS: 'cuestionarios_especialidades',
-  FICHAS: 'fichas_academia'
+  FICHAS: 'fichas_academia',
+  CONFIGURACION: 'configuracion'
 } as const;
 
 export enum OperationType {
@@ -129,7 +139,7 @@ export function handleFirestoreError(
 
 let inFlightConnectionTest: Promise<boolean> | null = null;
 let lastConnectionResult: { ok: boolean; checkedAt: number } | null = null;
-const CONNECTION_CACHE_MS = 15000;
+const CONNECTION_CACHE_MS = 10000;
 
 async function probeFirestoreRestReachability(): Promise<'reachable' | 'invalid_config' | 'unreachable'> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -190,7 +200,6 @@ export async function testConnection(forceRefresh = false): Promise<boolean> {
       return true;
     } catch (error) {
       if (error instanceof Error && error.message.includes('the client is offline')) {
-        console.warn('Firestore WebChannel quedó en modo sin conexión temporalmente.');
         lastConnectionResult = { ok: false, checkedAt: Date.now() };
         return false;
       }
@@ -240,16 +249,13 @@ export function onFirebaseAuthChange(callback: (user: User | null) => void): () 
   return onAuthStateChanged(auth, callback);
 }
 
+/**
+ * Verifies admin status strictly against Firestore rules:
+ * bootstrapped admin email OR `/admins/{uid}` document with `role === 'admin'`.
+ */
 export async function checkIsFirebaseAdmin(user: User | null = auth.currentUser): Promise<boolean> {
   if (!user || !user.emailVerified) return false;
-  const authorizedEmails = [
-    BOOTSTRAPPED_ADMIN_EMAIL,
-    'direccion@cetis7.edu.mx',
-    'subdireccion@cetis7.edu.mx',
-    'control.escolar@cetis7.edu.mx',
-    'admin@cetis7.edu.mx'
-  ];
-  if (user.email && authorizedEmails.includes(user.email.toLowerCase())) {
+  if (user.email && user.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL) {
     return true;
   }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -260,11 +266,30 @@ export async function checkIsFirebaseAdmin(user: User | null = auth.currentUser)
     return false;
   }
   try {
-    const snap = await getDoc(doc(db, COLLECTIONS.ADMINS, user.uid));
+    const snap = await getDocFromServer(doc(db, COLLECTIONS.ADMINS, user.uid));
     return snap.exists() && snap.data()?.role === 'admin';
   } catch {
     return false;
   }
+}
+
+export async function requireOnlineFirebase(requireAdmin = false): Promise<{ user: User; isAdmin: boolean }> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('Sin conexión a Internet. La aplicación trabaja exclusivamente en línea con Firebase y no permite operación offline.');
+  }
+  const user = auth.currentUser;
+  if (!user || !user.emailVerified) {
+    throw new Error('Se requiere iniciar sesión con una cuenta de Google verificada para acceder o guardar en la base única de Firebase.');
+  }
+  const connected = await testConnection(true);
+  if (!connected) {
+    throw new Error('No se pudo establecer conexión en línea con Cloud Firestore. Verifica tu red e intenta nuevamente.');
+  }
+  const isAdmin = await checkIsFirebaseAdmin(user);
+  if (requireAdmin && !isAdmin) {
+    throw new Error('Permisos insuficientes: esta operación requiere una cuenta autorizada de Dirección Académica en Firebase.');
+  }
+  return { user, isAdmin };
 }
 
 function sanitizeForFirestore<T>(value: T): T {
@@ -287,21 +312,14 @@ async function prepareWritePayload(
   docRef: DocumentReference,
   rawData: Record<string, unknown>,
   includeOwnerUid: boolean
-): Promise<{ payload: Record<string, unknown>; opType: OperationType }> {
+): Promise<{ payload: Record<string, unknown>; opType: OperationType; exists: boolean }> {
   const user = auth.currentUser;
   if (!user || !user.emailVerified) {
     throw new Error('Se requiere una cuenta Google verificada para guardar en Firestore.');
   }
 
-  let existingData: Record<string, unknown> | null = null;
-  try {
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      existingData = snap.data() as Record<string, unknown>;
-    }
-  } catch {
-    existingData = null;
-  }
+  const snap = await getDocFromServer(docRef);
+  const existingData = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
 
   const sanitized = sanitizeForFirestore(rawData);
   const resolvedOwnerUid = includeOwnerUid
@@ -321,119 +339,173 @@ async function prepareWritePayload(
 
   return {
     payload,
-    opType: existingData ? OperationType.UPDATE : OperationType.CREATE
+    opType: existingData ? OperationType.UPDATE : OperationType.CREATE,
+    exists: Boolean(existingData)
   };
 }
 
-export async function cloudGetEstudiantes(isAdmin?: boolean): Promise<Estudiante[]> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return [];
-  const path = COLLECTIONS.ESTUDIANTES;
-  const admin = isAdmin ?? (await checkIsFirebaseAdmin(user));
-  try {
-    const q = admin
-      ? collection(db, path)
-      : query(collection(db, path), where('ownerUid', '==', user.uid));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Estudiante);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
+// ---------------------------------------------------------------------
+// Global CURP & Num. Control Uniqueness (Cross-Device Online Checks)
+// ---------------------------------------------------------------------
 
-export async function cloudSaveEstudiante(estudiante: Estudiante): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
-  const path = `${COLLECTIONS.ESTUDIANTES}/${estudiante.num_control}`;
-  const docRef = doc(db, COLLECTIONS.ESTUDIANTES, estudiante.num_control);
-  let opType: OperationType = OperationType.WRITE;
+export async function cloudCheckCurpAvailable(curp: string): Promise<{ available: boolean; numControl?: string }> {
+  await requireOnlineFirebase(false);
+  const cleanCurp = curp.trim().toUpperCase();
+  const path = `${COLLECTIONS.CURP_REGISTRY}/${cleanCurp}`;
   try {
-    const prepared = await prepareWritePayload(
-      docRef,
-      estudiante as unknown as Record<string, unknown>,
-      true
-    );
-    opType = prepared.opType;
-    await setDoc(docRef, prepared.payload);
-  } catch (error) {
-    handleFirestoreError(error, opType, path);
-  }
-}
-
-export async function cloudGetDocentes(isAdmin?: boolean): Promise<DocenteAutorizado[]> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return [];
-  const admin = isAdmin ?? (await checkIsFirebaseAdmin(user));
-  if (!admin) return [];
-  const path = COLLECTIONS.DOCENTES;
-  try {
-    const snap = await getDocs(collection(db, path));
-    return snap.docs.map(d => d.data() as DocenteAutorizado);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
-
-export async function cloudSaveDocente(docente: DocenteAutorizado): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
-  const admin = await checkIsFirebaseAdmin();
-  if (!admin) return;
-  const path = `${COLLECTIONS.DOCENTES}/${docente.id}`;
-  const docRef = doc(db, COLLECTIONS.DOCENTES, docente.id);
-  let opType: OperationType = OperationType.WRITE;
-  try {
-    const prepared = await prepareWritePayload(
-      docRef,
-      docente as unknown as Record<string, unknown>,
-      false
-    );
-    opType = prepared.opType;
-    await setDoc(docRef, prepared.payload);
-  } catch (error) {
-    handleFirestoreError(error, opType, path);
-  }
-}
-
-export async function cloudGetEvaluaciones(isAdmin?: boolean): Promise<EvaluacionVocacional[]> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return [];
-  const path = COLLECTIONS.EVALUACIONES;
-  const admin = isAdmin ?? (await checkIsFirebaseAdmin(user));
-  try {
-    const q = admin
-      ? collection(db, path)
-      : query(collection(db, path), where('ownerUid', '==', user.uid));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as EvaluacionVocacional);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
-
-export async function cloudGetEvaluacion(numControl: string): Promise<EvaluacionVocacional | null> {
-  if (!hasVerifiedFirebaseUser()) return null;
-  const path = `${COLLECTIONS.EVALUACIONES}/${numControl}`;
-  try {
-    const snap = await getDoc(doc(db, COLLECTIONS.EVALUACIONES, numControl));
-    return snap.exists() ? (snap.data() as EvaluacionVocacional) : null;
+    const snap = await getDocFromServer(doc(db, COLLECTIONS.CURP_REGISTRY, cleanCurp));
+    if (!snap.exists()) return { available: true };
+    const data = snap.data();
+    return {
+      available: false,
+      numControl: typeof data?.num_control === 'string' ? data.num_control : undefined
+    };
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
   }
 }
 
+export async function cloudCheckNumControlAvailable(numControl: string): Promise<{ available: boolean }> {
+  await requireOnlineFirebase(false);
+  const cleanNC = numControl.trim();
+  const path = `${COLLECTIONS.ESTUDIANTES}/${cleanNC}`;
+  try {
+    const snap = await getDocFromServer(doc(db, COLLECTIONS.ESTUDIANTES, cleanNC));
+    return { available: !snap.exists() };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function cloudRegisterEstudianteAtomic(estudiante: Estudiante): Promise<Estudiante> {
+  const { user } = await requireOnlineFirebase(false);
+  const cleanNC = estudiante.num_control.trim();
+  const cleanCurp = estudiante.curp.trim().toUpperCase();
+  const ownerUid = estudiante.ownerUid || user.uid;
+
+  const estRef = doc(db, COLLECTIONS.ESTUDIANTES, cleanNC);
+  const curpRef = doc(db, COLLECTIONS.CURP_REGISTRY, cleanCurp);
+
+  try {
+    const [estSnap, curpSnap] = await Promise.all([
+      getDocFromServer(estRef),
+      getDocFromServer(curpRef)
+    ]);
+
+    if (curpSnap.exists()) {
+      const existingNc = curpSnap.data()?.num_control || 'otro registro';
+      throw new Error(
+        `La CURP "${cleanCurp}" ya está registrada en la base única de Firebase (Núm. Control: ${existingNc}). Por normatividad de la DGETI, solo se permite un registro por alumno.`
+      );
+    }
+
+    if (estSnap.exists()) {
+      throw new Error(
+        `El Número de Control "${cleanNC}" ya se encuentra asignado en Firebase. Verifica tu número escolar o contacta a Control Escolar.`
+      );
+    }
+
+    const normalized: Estudiante = {
+      ...estudiante,
+      num_control: cleanNC,
+      curp: cleanCurp,
+      ownerUid
+    };
+
+    const batch = writeBatch(db);
+    batch.set(estRef, {
+      ...sanitizeForFirestore(normalized as unknown as Record<string, unknown>),
+      ownerUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+    batch.set(curpRef, {
+      curp: cleanCurp,
+      num_control: cleanNC,
+      ownerUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    await batch.commit();
+    return normalized;
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes('ya está registrada') || error.message.includes('ya se encuentra asignado'))) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.CREATE, `${COLLECTIONS.ESTUDIANTES}/${cleanNC}`);
+  }
+}
+
+export async function cloudSaveEstudiante(estudiante: Estudiante): Promise<void> {
+  await requireOnlineFirebase(false);
+  const cleanNC = estudiante.num_control.trim();
+  const estRef = doc(db, COLLECTIONS.ESTUDIANTES, cleanNC);
+  const path = `${COLLECTIONS.ESTUDIANTES}/${cleanNC}`;
+
+  try {
+    const snap = await getDocFromServer(estRef);
+    if (!snap.exists()) {
+      await cloudRegisterEstudianteAtomic(estudiante);
+      return;
+    }
+    const existingData = snap.data() as Record<string, unknown>;
+    const sanitized = sanitizeForFirestore(estudiante as unknown as Record<string, unknown>);
+    const payload = {
+      ...sanitized,
+      num_control: existingData.num_control,
+      curp: existingData.curp,
+      ownerUid: existingData.ownerUid,
+      createdAt: existingData.createdAt,
+      updatedAt: serverTimestamp()
+    };
+    await setDoc(estRef, payload);
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes('ya está registrada') || error.message.includes('ya se encuentra asignado'))) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function cloudDeleteEstudianteCascade(numControl: string, curp?: string): Promise<void> {
+  await requireOnlineFirebase(true);
+  const cleanNC = numControl.trim();
+  const path = `${COLLECTIONS.ESTUDIANTES}/${cleanNC}`;
+  try {
+    let resolvedCurp = curp?.trim().toUpperCase();
+    if (!resolvedCurp) {
+      const estSnap = await getDocFromServer(doc(db, COLLECTIONS.ESTUDIANTES, cleanNC));
+      if (estSnap.exists() && typeof estSnap.data()?.curp === 'string') {
+        resolvedCurp = estSnap.data().curp.trim().toUpperCase();
+      }
+    }
+
+    const batch = writeBatch(db);
+    batch.delete(doc(db, COLLECTIONS.ESTUDIANTES, cleanNC));
+    batch.delete(doc(db, COLLECTIONS.EVALUACIONES, cleanNC));
+    batch.delete(doc(db, COLLECTIONS.PROGRESOS, cleanNC));
+    if (resolvedCurp) {
+      batch.delete(doc(db, COLLECTIONS.CURP_REGISTRY, resolvedCurp));
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Evaluaciones Vocacionales (Normalized, Zero Redundancy)
+// ---------------------------------------------------------------------
+
 export async function cloudSaveEvaluacion(evaluacion: EvaluacionVocacional): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
+  await requireOnlineFirebase(false);
   const path = `${COLLECTIONS.EVALUACIONES}/${evaluacion.num_control}`;
   const docRef = doc(db, COLLECTIONS.EVALUACIONES, evaluacion.num_control);
   let opType: OperationType = OperationType.WRITE;
   try {
-    const prepared = await prepareWritePayload(
-      docRef,
-      {
-        ...evaluacion,
-        sincronizado_firestore: true
-      },
-      true
-    );
+    const normalizedPayload = toNormalizedEvaluacionPayload(evaluacion);
+    const prepared = await prepareWritePayload(docRef, normalizedPayload, true);
     opType = prepared.opType;
     await setDoc(docRef, prepared.payload);
   } catch (error) {
@@ -441,36 +513,12 @@ export async function cloudSaveEvaluacion(evaluacion: EvaluacionVocacional): Pro
   }
 }
 
-export async function cloudDeleteEvaluacion(numControl: string): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
-  const admin = await checkIsFirebaseAdmin();
-  if (!admin) return;
-  const path = `${COLLECTIONS.EVALUACIONES}/${numControl}`;
-  try {
-    await deleteDoc(doc(db, COLLECTIONS.EVALUACIONES, numControl));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
-  }
-}
-
-export async function cloudGetProgresos(isAdmin?: boolean): Promise<ProgresoVirtual[]> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return [];
-  const path = COLLECTIONS.PROGRESOS;
-  const admin = isAdmin ?? (await checkIsFirebaseAdmin(user));
-  try {
-    const q = admin
-      ? collection(db, path)
-      : query(collection(db, path), where('ownerUid', '==', user.uid));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as ProgresoVirtual);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
+// ---------------------------------------------------------------------
+// Progreso Virtual
+// ---------------------------------------------------------------------
 
 export async function cloudSaveProgreso(progreso: ProgresoVirtual): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
+  await requireOnlineFirebase(false);
   const path = `${COLLECTIONS.PROGRESOS}/${progreso.num_control}`;
   const docRef = doc(db, COLLECTIONS.PROGRESOS, progreso.num_control);
   let opType: OperationType = OperationType.WRITE;
@@ -487,33 +535,19 @@ export async function cloudSaveProgreso(progreso: ProgresoVirtual): Promise<void
   }
 }
 
-export async function cloudGetCuestionarios(isAdmin?: boolean): Promise<CuestionarioEspecialidad[]> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return [];
-  const path = COLLECTIONS.CUESTIONARIOS;
-  const admin = isAdmin ?? (await checkIsFirebaseAdmin(user));
-  try {
-    const q = admin
-      ? collection(db, path)
-      : query(collection(db, path), where('activo', '==', true));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as CuestionarioEspecialidad);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
+// ---------------------------------------------------------------------
+// Docentes Autorizados (Admin Only)
+// ---------------------------------------------------------------------
 
-export async function cloudSaveCuestionario(cuestionario: CuestionarioEspecialidad): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
-  const admin = await checkIsFirebaseAdmin();
-  if (!admin) return;
-  const path = `${COLLECTIONS.CUESTIONARIOS}/${cuestionario.id}`;
-  const docRef = doc(db, COLLECTIONS.CUESTIONARIOS, cuestionario.id);
+export async function cloudSaveDocente(docente: DocenteAutorizado): Promise<void> {
+  await requireOnlineFirebase(true);
+  const path = `${COLLECTIONS.DOCENTES}/${docente.id}`;
+  const docRef = doc(db, COLLECTIONS.DOCENTES, docente.id);
   let opType: OperationType = OperationType.WRITE;
   try {
     const prepared = await prepareWritePayload(
       docRef,
-      cuestionario as unknown as Record<string, unknown>,
+      docente as unknown as Record<string, unknown>,
       false
     );
     opType = prepared.opType;
@@ -523,41 +557,22 @@ export async function cloudSaveCuestionario(cuestionario: CuestionarioEspecialid
   }
 }
 
-export async function cloudDeleteCuestionario(id: string): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
-  const admin = await checkIsFirebaseAdmin();
-  if (!admin) return;
-  const path = `${COLLECTIONS.CUESTIONARIOS}/${id}`;
+export async function cloudDeleteDocente(id: string): Promise<void> {
+  await requireOnlineFirebase(true);
+  const path = `${COLLECTIONS.DOCENTES}/${id}`;
   try {
-    await deleteDoc(doc(db, COLLECTIONS.CUESTIONARIOS, id));
+    await deleteDoc(doc(db, COLLECTIONS.DOCENTES, id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
-export async function cloudGetFichasAcademia(isAdmin?: boolean): Promise<FichaAcademiaReq[]> {
-  const user = auth.currentUser;
-  if (!user || !user.emailVerified) return [];
-  const path = COLLECTIONS.FICHAS;
-  const admin = isAdmin ?? (await checkIsFirebaseAdmin(user));
-  try {
-    const q = admin
-      ? collection(db, path)
-      : query(
-          collection(db, path),
-          where('especialidad_id', 'in', ['programacion', 'comercio', 'rrhh', 'cosmetologia'])
-        );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as FichaAcademiaReq);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
+// ---------------------------------------------------------------------
+// Fichas Academia & Oficio Circular (Single Source of Truth)
+// ---------------------------------------------------------------------
 
 export async function cloudSaveFichaAcademia(ficha: FichaAcademiaReq): Promise<void> {
-  if (!hasVerifiedFirebaseUser()) return;
-  const admin = await checkIsFirebaseAdmin();
-  if (!admin) return;
+  await requireOnlineFirebase(true);
   const path = `${COLLECTIONS.FICHAS}/${ficha.especialidad_id}`;
   const docRef = doc(db, COLLECTIONS.FICHAS, ficha.especialidad_id);
   let opType: OperationType = OperationType.WRITE;
@@ -572,4 +587,337 @@ export async function cloudSaveFichaAcademia(ficha: FichaAcademiaReq): Promise<v
   } catch (error) {
     handleFirestoreError(error, opType, path);
   }
+}
+
+export async function cloudSaveOficioCircular(oficio: OficioCircular): Promise<void> {
+  await requireOnlineFirebase(true);
+  const path = `${COLLECTIONS.CONFIGURACION}/${CONFIG_OFICIO_ID}`;
+  const docRef = doc(db, COLLECTIONS.CONFIGURACION, CONFIG_OFICIO_ID);
+  let opType: OperationType = OperationType.WRITE;
+  try {
+    const prepared = await prepareWritePayload(
+      docRef,
+      {
+        ...oficio,
+        id: CONFIG_OFICIO_ID
+      } as unknown as Record<string, unknown>,
+      false
+    );
+    opType = prepared.opType;
+    await setDoc(docRef, prepared.payload);
+  } catch (error) {
+    handleFirestoreError(error, opType, path);
+  }
+}
+
+export async function cloudEnsureInstitutionalDefaultsIfEmpty(
+  defaultFichas: Record<string, FichaAcademiaReq>,
+  defaultOficio: OficioCircular
+): Promise<void> {
+  const { isAdmin } = await requireOnlineFirebase(false);
+  if (!isAdmin) return;
+
+  for (const ficha of Object.values(defaultFichas)) {
+    const ref = doc(db, COLLECTIONS.FICHAS, ficha.especialidad_id);
+    const snap = await getDocFromServer(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        ...sanitizeForFirestore(ficha as unknown as Record<string, unknown>),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
+  }
+
+  const oficioRef = doc(db, COLLECTIONS.CONFIGURACION, CONFIG_OFICIO_ID);
+  const oficioSnap = await getDocFromServer(oficioRef);
+  if (!oficioSnap.exists()) {
+    await setDoc(oficioRef, {
+      ...sanitizeForFirestore({ ...defaultOficio, id: CONFIG_OFICIO_ID } as unknown as Record<string, unknown>),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Admin Bulk Maintenance (Batch Wipe, Seed & Restore)
+// ---------------------------------------------------------------------
+
+async function commitOperationsInChunks(
+  ops: Array<(batch: ReturnType<typeof writeBatch>) => void>
+): Promise<void> {
+  const CHUNK_SIZE = 400;
+  for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    const slice = ops.slice(i, i + CHUNK_SIZE);
+    slice.forEach(fn => fn(batch));
+    await batch.commit();
+  }
+}
+
+export async function cloudWipeEstudiantes(): Promise<void> {
+  await requireOnlineFirebase(true);
+  try {
+    const [estSnap, curpSnap, evalSnap, progSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.ESTUDIANTES)),
+      getDocs(collection(db, COLLECTIONS.CURP_REGISTRY)),
+      getDocs(collection(db, COLLECTIONS.EVALUACIONES)),
+      getDocs(collection(db, COLLECTIONS.PROGRESOS))
+    ]);
+
+    const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+    evalSnap.docs.forEach(d => ops.push(b => b.delete(d.ref)));
+    progSnap.docs.forEach(d => ops.push(b => b.delete(d.ref)));
+    estSnap.docs.forEach(d => ops.push(b => b.delete(d.ref)));
+    curpSnap.docs.forEach(d => ops.push(b => b.delete(d.ref)));
+
+    await commitOperationsInChunks(ops);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, COLLECTIONS.ESTUDIANTES);
+  }
+}
+
+export async function cloudWipeDocentes(): Promise<void> {
+  await requireOnlineFirebase(true);
+  try {
+    const docSnap = await getDocs(collection(db, COLLECTIONS.DOCENTES));
+    const ops = docSnap.docs.map(d => (b: ReturnType<typeof writeBatch>) => b.delete(d.ref));
+    await commitOperationsInChunks(ops);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, COLLECTIONS.DOCENTES);
+  }
+}
+
+export async function cloudSeedEstudiantesWithRelations(
+  estudiantes: Estudiante[],
+  evaluaciones: Record<string, EvaluacionVocacional>,
+  progresos: Record<string, ProgresoVirtual>
+): Promise<void> {
+  const { user } = await requireOnlineFirebase(true);
+  await cloudWipeEstudiantes();
+
+  try {
+    const studentOps: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+    for (const est of estudiantes) {
+      const cleanNC = est.num_control.trim();
+      const cleanCurp = est.curp.trim().toUpperCase();
+      const ownerUid = est.ownerUid || user.uid;
+      const estPayload = sanitizeForFirestore({
+        ...est,
+        num_control: cleanNC,
+        curp: cleanCurp,
+        ownerUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      studentOps.push(b => b.set(doc(db, COLLECTIONS.ESTUDIANTES, cleanNC), estPayload));
+      studentOps.push(b =>
+        b.set(doc(db, COLLECTIONS.CURP_REGISTRY, cleanCurp), {
+          curp: cleanCurp,
+          num_control: cleanNC,
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        })
+      );
+    }
+    await commitOperationsInChunks(studentOps);
+
+    const relatedOps: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+    for (const ev of Object.values(evaluaciones)) {
+      const cleanNC = ev.num_control.trim();
+      const matchingEst = estudiantes.find(e => e.num_control.trim() === cleanNC);
+      const ownerUid = ev.ownerUid || matchingEst?.ownerUid || user.uid;
+      const norm = toNormalizedEvaluacionPayload({ ...ev, ownerUid });
+      relatedOps.push(b =>
+        b.set(doc(db, COLLECTIONS.EVALUACIONES, cleanNC), {
+          ...sanitizeForFirestore(norm),
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        })
+      );
+    }
+    for (const prog of Object.values(progresos)) {
+      const cleanNC = prog.num_control.trim();
+      const matchingEst = estudiantes.find(e => e.num_control.trim() === cleanNC);
+      const ownerUid = prog.ownerUid || matchingEst?.ownerUid || user.uid;
+      relatedOps.push(b =>
+        b.set(doc(db, COLLECTIONS.PROGRESOS, cleanNC), {
+          ...sanitizeForFirestore(prog as unknown as Record<string, unknown>),
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        })
+      );
+    }
+    await commitOperationsInChunks(relatedOps);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, COLLECTIONS.ESTUDIANTES);
+  }
+}
+
+export async function cloudSeedDocentesList(docentes: DocenteAutorizado[]): Promise<void> {
+  await requireOnlineFirebase(true);
+  await cloudWipeDocentes();
+  try {
+    const ops = docentes.map(d => (b: ReturnType<typeof writeBatch>) =>
+      b.set(doc(db, COLLECTIONS.DOCENTES, d.id), {
+        ...sanitizeForFirestore(d as unknown as Record<string, unknown>),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      })
+    );
+    await commitOperationsInChunks(ops);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, COLLECTIONS.DOCENTES);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Real-Time Online Database Subscriptions (onSnapshot)
+// ---------------------------------------------------------------------
+
+export interface AppDbCallbacks {
+  onEstudiantes: (list: Estudiante[]) => void;
+  onEvaluaciones: (dict: Record<string, EvaluacionVocacional>) => void;
+  onProgresos: (dict: Record<string, ProgresoVirtual>) => void;
+  onFichas: (dict: Record<string, FichaAcademiaReq>) => void;
+  onOficio: (oficio: OficioCircular | null) => void;
+  onDocentes: (list: DocenteAutorizado[]) => void;
+  onError: (err: Error) => void;
+}
+
+export function subscribeAppDatabase(
+  user: User,
+  isAdmin: boolean,
+  callbacks: AppDbCallbacks
+): () => void {
+  const unsubs: Array<() => void> = [];
+
+  const handleListenerErr = (path: string, err: unknown) => {
+    try {
+      handleFirestoreError(err, OperationType.LIST, path);
+    } catch (wrapped) {
+      callbacks.onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+    }
+  };
+
+  const estQuery = isAdmin
+    ? collection(db, COLLECTIONS.ESTUDIANTES)
+    : query(collection(db, COLLECTIONS.ESTUDIANTES), where('ownerUid', '==', user.uid));
+
+  unsubs.push(
+    onSnapshot(
+      estQuery,
+      snap => {
+        const list = snap.docs.map(d => {
+          const data = d.data() as Estudiante;
+          return {
+            ...data,
+            num_control: data.num_control || d.id
+          };
+        });
+        callbacks.onEstudiantes(list);
+      },
+      err => handleListenerErr(COLLECTIONS.ESTUDIANTES, err)
+    )
+  );
+
+  const evalQuery = isAdmin
+    ? collection(db, COLLECTIONS.EVALUACIONES)
+    : query(collection(db, COLLECTIONS.EVALUACIONES), where('ownerUid', '==', user.uid));
+
+  unsubs.push(
+    onSnapshot(
+      evalQuery,
+      snap => {
+        const dict: Record<string, EvaluacionVocacional> = {};
+        snap.docs.forEach(d => {
+          const normalized = normalizeEvaluacionFromFirestore({
+            ...(d.data() as Record<string, unknown>),
+            num_control: (d.data()?.num_control as string) || d.id
+          });
+          if (normalized.num_control) {
+            dict[normalized.num_control] = normalized;
+          }
+        });
+        callbacks.onEvaluaciones(dict);
+      },
+      err => handleListenerErr(COLLECTIONS.EVALUACIONES, err)
+    )
+  );
+
+  const progQuery = isAdmin
+    ? collection(db, COLLECTIONS.PROGRESOS)
+    : query(collection(db, COLLECTIONS.PROGRESOS), where('ownerUid', '==', user.uid));
+
+  unsubs.push(
+    onSnapshot(
+      progQuery,
+      snap => {
+        const dict: Record<string, ProgresoVirtual> = {};
+        snap.docs.forEach(d => {
+          const data = d.data() as ProgresoVirtual;
+          const nc = data.num_control || d.id;
+          if (nc) dict[nc] = { ...data, num_control: nc };
+        });
+        callbacks.onProgresos(dict);
+      },
+      err => handleListenerErr(COLLECTIONS.PROGRESOS, err)
+    )
+  );
+
+  const fichasQuery = isAdmin
+    ? collection(db, COLLECTIONS.FICHAS)
+    : query(
+        collection(db, COLLECTIONS.FICHAS),
+        where('especialidad_id', 'in', ['programacion', 'comercio', 'rrhh', 'cosmetologia'])
+      );
+
+  unsubs.push(
+    onSnapshot(
+      fichasQuery,
+      snap => {
+        const dict: Record<string, FichaAcademiaReq> = {};
+        snap.docs.forEach(d => {
+          const data = d.data() as FichaAcademiaReq;
+          const id = data.especialidad_id || d.id;
+          if (id) dict[id] = data;
+        });
+        callbacks.onFichas(dict);
+      },
+      err => handleListenerErr(COLLECTIONS.FICHAS, err)
+    )
+  );
+
+  unsubs.push(
+    onSnapshot(
+      doc(db, COLLECTIONS.CONFIGURACION, CONFIG_OFICIO_ID),
+      snap => {
+        callbacks.onOficio(snap.exists() ? (snap.data() as OficioCircular) : null);
+      },
+      err => handleListenerErr(`${COLLECTIONS.CONFIGURACION}/${CONFIG_OFICIO_ID}`, err)
+    )
+  );
+
+  if (isAdmin) {
+    unsubs.push(
+      onSnapshot(
+        collection(db, COLLECTIONS.DOCENTES),
+        snap => {
+          const list = snap.docs.map(d => d.data() as DocenteAutorizado);
+          callbacks.onDocentes(list);
+        },
+        err => handleListenerErr(COLLECTIONS.DOCENTES, err)
+      )
+    );
+  } else {
+    callbacks.onDocentes([]);
+  }
+
+  return () => {
+    unsubs.forEach(fn => fn());
+  };
 }

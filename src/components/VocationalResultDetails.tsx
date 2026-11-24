@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { EvaluacionVocacional, SpecialtyId } from '../types';
 import { TEST_VOCACIONAL_40_PREGUNTAS, TEST_VOCACIONAL_PARTES } from '../data/mockData';
+import { deriveVocationalMetrics } from '../utils/vocationalMetrics';
 import {
   ChevronDown,
   ChevronUp,
@@ -63,22 +64,11 @@ export const VocationalResultDetails: React.FC<VocationalResultDetailsProps> = (
 }) => {
   const [mostrarHojaRespuestas, setMostrarHojaRespuestas] = useState(defaultOpenSheet);
 
-  const puntajes: Record<SpecialtyId, number> = evaluacion.puntajes_especialidad || {
-    programacion: Math.round(((evaluacion.score_aptitud_programacion + evaluacion.score_gusto_programacion) / 200) * 40),
-    rrhh: Math.round(((evaluacion.score_aptitud_rrhh + evaluacion.score_gusto_rrhh) / 200) * 40),
-    comercio: Math.round(((evaluacion.score_aptitud_comercio + evaluacion.score_gusto_comercio) / 200) * 40),
-    cosmetologia: Math.round(((evaluacion.score_aptitud_cosmetologia + evaluacion.score_gusto_cosmetologia) / 200) * 40)
-  };
-
+  const metrics = deriveVocationalMetrics(evaluacion);
+  const puntajes = metrics.puntajes;
   const totalRespondidos =
     Object.values(puntajes).reduce((acc, v) => acc + v, 0) || evaluacion.total_reactivos || 40;
-
-  const porcentajes: Record<SpecialtyId, number> = evaluacion.porcentajes_especialidad || {
-    programacion: totalRespondidos > 0 ? Math.round((puntajes.programacion / totalRespondidos) * 100) : 0,
-    rrhh: totalRespondidos > 0 ? Math.round((puntajes.rrhh / totalRespondidos) * 100) : 0,
-    comercio: totalRespondidos > 0 ? Math.round((puntajes.comercio / totalRespondidos) * 100) : 0,
-    cosmetologia: totalRespondidos > 0 ? Math.round((puntajes.cosmetologia / totalRespondidos) * 100) : 0
-  };
+  const porcentajes = metrics.porcentajes;
 
   const maxPts = Math.max(...Object.values(puntajes));
   const empatadas =
@@ -103,15 +93,9 @@ export const VocationalResultDetails: React.FC<VocationalResultDetailsProps> = (
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono-code text-[11px] font-semibold border ${
-              evaluacion.sincronizado_firestore
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                : 'bg-blue-50 text-blue-800 border-blue-200'
-            }`}
-          >
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono-code text-[11px] font-semibold border bg-emerald-50 text-emerald-800 border-emerald-200">
             <Database className="w-3 h-3" />
-            {evaluacion.sincronizado_firestore ? 'BD Firestore Sincronizada' : 'Guardado en BD Local + Nube'}
+            Base Única Firebase En Línea
           </span>
           <span className="text-[11px] font-mono-code text-stone-500">
             {new Date(evaluacion.fecha_evaluacion).toLocaleDateString('es-MX')}
@@ -263,7 +247,7 @@ export const VocationalResultDetails: React.FC<VocationalResultDetailsProps> = (
       )}
 
       {/* Collapsible 40-Item Answer Sheet */}
-      {evaluacion.respuestas_detalle && Object.keys(evaluacion.respuestas_detalle).length > 0 && (
+      {Object.keys(metrics.respuestasDetalle).length > 0 && (
         <div className="bg-white rounded-xl border border-stone-200 overflow-hidden">
           <button
             type="button"
@@ -287,7 +271,7 @@ export const VocationalResultDetails: React.FC<VocationalResultDetailsProps> = (
           {mostrarHojaRespuestas && (
             <div className="p-4 max-h-96 overflow-y-auto divide-y divide-stone-100 text-xs">
               {TEST_VOCACIONAL_40_PREGUNTAS.map(pregunta => {
-                const resp = evaluacion.respuestas_detalle?.[pregunta.id];
+                const resp = metrics.respuestasDetalle[pregunta.id];
                 const opt = resp
                   ? pregunta.opciones.find(o => o.letra === resp.opcion)
                   : undefined;

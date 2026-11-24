@@ -1,5 +1,6 @@
 import React from 'react';
 import { EvaluacionVocacional } from '../types';
+import { deriveVocationalMetrics } from '../utils/vocationalMetrics';
 
 interface VocationalRadarProps {
   evaluacion: EvaluacionVocacional;
@@ -9,13 +10,14 @@ export const VocationalRadar: React.FC<VocationalRadarProps> = ({ evaluacion }) 
   const size = 320;
   const center = size / 2;
   const radius = 110;
+  const metrics = deriveVocationalMetrics(evaluacion);
 
   // 4 axes: Top = Programación, Right = Comercio, Bottom = Recursos Humanos, Left = Cosmetología
   const axes = [
-    { key: 'programacion', label: 'Programación', aptitud: evaluacion.score_aptitud_programacion, gusto: evaluacion.score_gusto_programacion, angle: -Math.PI / 2 },
-    { key: 'comercio', label: 'Comercio y Aduanas', aptitud: evaluacion.score_aptitud_comercio, gusto: evaluacion.score_gusto_comercio, angle: 0 },
-    { key: 'rrhh', label: 'Recursos Humanos', aptitud: evaluacion.score_aptitud_rrhh, gusto: evaluacion.score_gusto_rrhh, angle: Math.PI / 2 },
-    { key: 'cosmetologia', label: 'Cosmetología', aptitud: evaluacion.score_aptitud_cosmetologia, gusto: evaluacion.score_gusto_cosmetologia, angle: Math.PI }
+    { key: 'programacion', label: 'Programación', aptitud: metrics.aptitud.programacion, gusto: metrics.gusto.programacion, angle: -Math.PI / 2 },
+    { key: 'comercio', label: 'Comercio y Aduanas', aptitud: metrics.aptitud.comercio, gusto: metrics.gusto.comercio, angle: 0 },
+    { key: 'rrhh', label: 'Recursos Humanos', aptitud: metrics.aptitud.rrhh, gusto: metrics.gusto.rrhh, angle: Math.PI / 2 },
+    { key: 'cosmetologia', label: 'Cosmetología', aptitud: metrics.aptitud.cosmetologia, gusto: metrics.gusto.cosmetologia, angle: Math.PI }
   ];
 
   // Helper to get coordinates given value (0 to 100) and angle
@@ -142,10 +144,8 @@ export const VocationalRadar: React.FC<VocationalRadarProps> = ({ evaluacion }) 
           <div className="space-y-2">
             {axes.map(axis => {
               const key = axis.key as 'programacion' | 'comercio' | 'rrhh' | 'cosmetologia';
-              const puntos40 = evaluacion.puntajes_especialidad?.[key];
-              const pctAfinidad =
-                evaluacion.porcentajes_especialidad?.[key] ??
-                Math.round((axis.aptitud + axis.gusto) / 2);
+              const puntos40 = metrics.puntajes[key];
+              const pctAfinidad = metrics.porcentajes[key];
               const isMatch = Math.abs(axis.aptitud - axis.gusto) <= 25 && pctAfinidad >= 35;
               return (
                 <div key={axis.key} className="bg-stone-50 rounded-lg p-2.5 border border-stone-200">

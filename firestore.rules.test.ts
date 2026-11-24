@@ -1,6 +1,6 @@
 /**
  * Suite de pruebas de seguridad TDD para Firestore Rules (Phase 0 - Dirty Dozen)
- * Verifica que los 12 ataques de identidad, integridad y estado devuelvan PERMISSION_DENIED.
+ * Verifica que los 12 ataques de identidad, integridad, unicidad y estado devuelvan PERMISSION_DENIED.
  */
 
 export const DIRTY_DOZEN_SECURITY_CASES = [
@@ -40,20 +40,20 @@ export const DIRTY_DOZEN_SECURITY_CASES = [
   },
   {
     id: 5,
-    name: 'Shadow update injecting ghost field role/isAdmin',
+    name: 'Shadow update injecting redundant score or ghost field in evaluaciones',
     auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
     operation: 'update',
-    path: 'estudiantes/26316070019999',
-    payload: { isAdmin: true },
+    path: 'evaluaciones/26316070019999',
+    payload: { score_aptitud_programacion: 100, isAdmin: true },
     expected: 'PERMISSION_DENIED'
   },
   {
     id: 6,
-    name: 'Immutable ownerUid tampering during update',
+    name: 'Orphan student create without atomic curp_registry coupling',
     auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
-    operation: 'update',
-    path: 'evaluaciones/26316070019999',
-    payload: { ownerUid: 'other-uid' },
+    operation: 'create',
+    path: 'estudiantes/26316070019999',
+    payload: { num_control: '26316070019999', curp: 'CURPDUP990101HDF01' },
     expected: 'PERMISSION_DENIED'
   },
   {
@@ -93,18 +93,19 @@ export const DIRTY_DOZEN_SECURITY_CASES = [
   },
   {
     id: 11,
-    name: 'Unfiltered list query by non-admin on evaluaciones',
+    name: 'Unfiltered list query by non-admin on curp_registry or evaluaciones',
     auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
     operation: 'list',
-    path: 'evaluaciones',
+    path: 'curp_registry',
     expected: 'PERMISSION_DENIED'
   },
   {
     id: 12,
-    name: 'Non-admin read or write on confidential docentes collection',
+    name: 'Non-admin read on docentes or write on configuracion',
     auth: { uid: 'student-uid-1', email: 'alumno@gmail.com', email_verified: true },
-    operation: 'get',
-    path: 'docentes/DOC-2026-001',
+    operation: 'update',
+    path: 'configuracion/oficio_circular',
+    payload: { clave_oficio: 'FAKE-2026' },
     expected: 'PERMISSION_DENIED'
   }
 ];

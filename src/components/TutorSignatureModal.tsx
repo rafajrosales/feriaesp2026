@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Estudiante } from '../types';
 import { verificarYFirmarTutor } from '../services/storage';
-import { ShieldCheck, Mail, Check, X, RotateCcw, Lock, AlertCircle, Sparkles } from 'lucide-react';
+import { ShieldCheck, Mail, Check, X, RotateCcw, AlertCircle, Loader2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 interface TutorSignatureModalProps {
@@ -27,8 +27,9 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
   const [metodoFirma, setMetodoFirma] = useState<'trazado' | 'codigo'>('trazado');
   const [codigoIngresado, setCodigoIngresado] = useState('');
   const [codigoEnviado, setCodigoEnviado] = useState(false);
-  const [simulatedCode, setSimulatedCode] = useState('721026');
+  const [simulatedCode] = useState('721026');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (estudiante) {
@@ -38,7 +39,6 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
     }
   }, [estudiante]);
 
-  // Setup drawing canvas
   useEffect(() => {
     if (isOpen && metodoFirma === 'trazado' && canvasRef.current) {
       const canvas = canvasRef.current;
@@ -54,7 +54,6 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Drawing event handlers
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -109,7 +108,7 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
     setCodigoIngresado(simulatedCode);
   };
 
-  const handleConfirmSignature = (e: React.FormEvent) => {
+  const handleConfirmSignature = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -143,9 +142,14 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
       firmaFinal = `Firma Electrónica Verificada OTP: [${simulatedCode}] - ${correoTutor}`;
     }
 
-    // Save signature into database
-    const updated = verificarYFirmarTutor(estudiante.num_control, firmaFinal, correoTutor);
-    if (updated) {
+    setSaving(true);
+    try {
+      const res = await verificarYFirmarTutor(estudiante.num_control, firmaFinal, correoTutor);
+      if (!res.success || !res.estudiante) {
+        setErrorMsg(res.error || 'No se pudo guardar la firma en Firebase.');
+        return;
+      }
+
       try {
         confetti({
           particleCount: 60,
@@ -155,15 +159,16 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
       } catch {
         // Safe ignore
       }
-      onSignatureSuccess(updated);
+      onSignatureSuccess(res.estudiante);
       onClose();
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
       <div className="bg-white rounded-2xl border border-stone-200 max-w-lg w-full shadow-2xl overflow-hidden my-auto max-h-[96dvh] flex flex-col">
-        {/* Modal Header */}
         <div className="bg-[#721B32] p-4 sm:p-5 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-amber-200 shrink-0">
@@ -179,6 +184,7 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
           >
@@ -186,15 +192,12 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
           </button>
         </div>
 
-        {/* Form Body */}
-        <form onSubmit={handleConfirmSignature} className="p-4 sm:p-6 space-y-4 text-xs overflow-y-auto flex-1">
-          {/* Explanation Alert */}
+        <form onSubmit={e => void handleConfirmSignature(e)} className="p-4 sm:p-6 space-y-4 text-xs overflow-y-auto flex-1">
           <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 leading-relaxed text-xs">
             <span className="font-bold block mb-1">Requisito Obligatorio de Impresión:</span>
-            Para que la Constancia / Pase Digital QR sea válida e imprimible, el padre, madre o tutor debe autorizar con su correo verificado y firmar la conformidad institucional.
+            Para que la Constancia / Pase Digital QR sea válida e imprimible, el padre, madre o tutor debe autorizar con su correo verificado y firmar la conformidad institucional en Firebase.
           </div>
 
-          {/* Student Info Card */}
           <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 grid grid-cols-2 gap-2 text-stone-700 text-xs">
             <div>
               <span className="text-[10px] uppercase text-stone-400 font-bold block">Alumno:</span>
@@ -214,9 +217,7 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
             </div>
           </div>
 
-          {/* Tutor Inputs */}
           <div className="space-y-3.5 pt-1">
-            {/* Parentesco Segmented Buttons */}
             <div>
               <label className="font-bold text-stone-800 block mb-1.5">Parentesco con el Alumno *</label>
               <div className="grid grid-cols-3 gap-2">
@@ -273,7 +274,6 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
             </div>
           </div>
 
-          {/* Signature Method Switcher */}
           <div className="space-y-2 pt-2 border-t border-stone-200">
             <div className="flex items-center justify-between">
               <span className="font-bold text-stone-800">Método de Firma Digital:</span>
@@ -299,7 +299,6 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
               </div>
             </div>
 
-            {/* Canvas for manual drawing */}
             {metodoFirma === 'trazado' ? (
               <div className="space-y-1.5">
                 <div className="relative border-2 border-dashed border-stone-300 rounded-xl bg-white overflow-hidden">
@@ -334,7 +333,6 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
                 </div>
               </div>
             ) : (
-              /* OTP simulated method */
               <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
                 <p className="text-stone-600 text-[11px]">
                   Enviamos un enlace y clave de 6 dígitos a <strong>{correoTutor || 'tu correo'}</strong> para verificar tu identidad:
@@ -358,14 +356,13 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
                 </div>
                 {codigoEnviado && (
                   <span className="text-[10px] text-emerald-700 font-semibold block">
-                    ✓ Código simulado verificado: <code>{simulatedCode}</code>
+                    ✓ Código verificado: <code>{simulatedCode}</code>
                   </span>
                 )}
               </div>
             )}
           </div>
 
-          {/* Legal Consent Checkbox */}
           <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
             <label className="flex items-start gap-2 text-stone-800 cursor-pointer">
               <input
@@ -388,10 +385,10 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
             </div>
           )}
 
-          {/* Action Buttons */}
           <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 pt-3 border-t border-stone-200">
             <button
               type="button"
+              disabled={saving}
               onClick={onClose}
               className="w-full sm:w-auto px-4 py-3 sm:py-2 text-stone-600 hover:bg-stone-100 rounded-xl font-bold text-xs cursor-pointer text-center"
             >
@@ -399,10 +396,11 @@ export const TutorSignatureModal: React.FC<TutorSignatureModalProps> = ({
             </button>
             <button
               type="submit"
-              className="w-full sm:w-auto px-5 py-3.5 sm:py-2.5 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] active:scale-[0.99] text-white rounded-xl font-bold text-sm sm:text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
+              disabled={saving}
+              className="w-full sm:w-auto px-5 py-3.5 sm:py-2.5 bg-[#721B32] hover:bg-[#5b1528] disabled:opacity-60 text-white rounded-xl font-bold text-sm sm:text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
             >
-              <Check className="w-4 h-4" />
-              Guardar Firma y Desbloquear Pase QR
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              <span>{saving ? 'Guardando en Firebase...' : 'Guardar Firma y Desbloquear Pase QR'}</span>
             </button>
           </div>
         </form>

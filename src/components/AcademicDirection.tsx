@@ -1,23 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import { 
-  getEstudiantes, 
   getProgresoVirtual, 
-  getEvaluacionVocacional, 
-  getFichasAcademia,
   saveFichaAcademia,
-  getOficioCircular,
   saveOficioCircular,
-  resetAllDataToDefault,
-  getDocentes,
   registrarNuevoDocente,
   cambiarEstatusDocente,
   eliminarDocente,
-  descargarRespaldoJSON,
-  sincronizarBaseDeDatosCETis7
+  sincronizarBaseDeDatosCETis7,
+  subscribeDbStore,
+  getDbStoreSnapshot
 } from '../services/storage';
-import { SpecialtyId, FichaAcademiaReq, OficioCircular, DocenteAutorizado, Estudiante, ItemGaleriaAlumno, VideoAcademiaDocente, ReactivoExamen, EvaluacionVocacional } from '../types';
+import { SpecialtyId, FichaAcademiaReq, OficioCircular, DocenteAutorizado, Estudiante, ItemGaleriaAlumno, ReactivoExamen, EvaluacionVocacional } from '../types';
 import { parseEmbedMediaUrl } from '../utils/media';
-import { ESPECIALIDADES, FICHAS_ACADEMIA_DEFAULT } from '../data/mockData';
+import { FICHAS_ACADEMIA_DEFAULT } from '../data/mockData';
+import { deriveVocationalMetrics } from '../utils/vocationalMetrics';
 import { BackupAndResetModal } from './BackupAndResetModal';
 import { VocationalResultDetails } from './VocationalResultDetails';
 import { VocationalRadar } from './VocationalRadar';
@@ -36,34 +32,37 @@ import {
   UserPlus,
   ShieldCheck,
   Lock,
-  Unlock,
   Trash2,
   Eye,
   EyeOff,
   Copy,
   Sparkles,
-  School,
-  Building2,
   X,
   Search,
   Check,
   Video,
-  Image as ImageIcon,
   Plus,
-  Film,
-  Link,
-  Play
+  Film
 } from 'lucide-react';
 import { MatriculaDashboard } from './MatriculaDashboard';
 
 export const AcademicDirection: React.FC = () => {
+  const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
+
   const [subTab, setSubTab] = useState<'tablero' | 'ficha' | 'circular' | 'padron' | 'docentes'>('tablero');
   const [selectedAcademia, setSelectedAcademia] = useState<SpecialtyId>('programacion');
   
-  // Fichas & Circular state
-  const [fichas, setFichas] = useState(getFichasAcademia());
-  const [oficio, setOficio] = useState<OficioCircular>(getOficioCircular());
+  // Drafts layered on top of reactive Firestore store
+  const [fichasDrafts, setFichasDrafts] = useState<Partial<Record<SpecialtyId, FichaAcademiaReq>>>({});
+  const [oficioDraft, setOficioDraft] = useState<OficioCircular | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [actionErrorNotice, setActionErrorNotice] = useState<string | null>(null);
+  const [savingAction, setSavingAction] = useState<boolean>(false);
+
+  // Inline confirmation states (replacing window.confirm)
+  const [confirmDeleteReactivoIdx, setConfirmDeleteReactivoIdx] = useState<number | null>(null);
+  const [confirmResetReactivos, setConfirmResetReactivos] = useState<boolean>(false);
+  const [confirmDeleteDocenteId, setConfirmDeleteDocenteId] = useState<string | null>(null);
 
   // Filters for padrón estudiantil
   const [searchQuery, setSearchQuery] = useState('');
@@ -72,7 +71,7 @@ export const AcademicDirection: React.FC = () => {
   const [filterTutor, setFilterTutor] = useState<string>('TODOS');
 
   // Docentes state & management
-  const [docentes, setDocentes] = useState<DocenteAutorizado[]>(() => getDocentes());
+  const docentes = dbSnapshot.docentes;
   const [mostrarModalAltaDocente, setMostrarModalAltaDocente] = useState(false);
   const [searchDocente, setSearchDocente] = useState('');
   const [filterDocenteAcademia, setFilterDocenteAcademia] = useState<string>('TODAS');
@@ -105,13 +104,33 @@ export const AcademicDirection: React.FC = () => {
   const [reactivoEsInformativo, setReactivoEsInformativo] = useState(false);
   const [reactivoError, setReactivoError] = useState<string | null>(null);
 
-  const [estudiantesList, setEstudiantesList] = useState<Estudiante[]>(() => getEstudiantes());
   const [alumnoInspeccionVocacional, setAlumnoInspeccionVocacional] = useState<{
     estudiante: Estudiante;
     evaluacion: EvaluacionVocacional | null;
   } | null>(null);
-  const estudiantes = estudiantesList;
-  const currentFicha = fichas[selectedAcademia];
+
+  const estudiantes = dbSnapshot.estudiantes;
+  const currentFicha: FichaAcademiaReq = fichasDrafts[selectedAcademia] ?? dbSnapshot.fichas[selectedAcademia];
+  const oficio: OficioCircular = oficioDraft ?? dbSnapshot.oficio;
+
+  const setFichas = (updater: (prev: Record<string, FichaAcademiaReq>) => Record<string, FichaAcademiaReq>) => {
+    const base = { ...dbSnapshot.fichas, ...fichasDrafts };
+    const next = updater(base);
+    if (next[selectedAcademia]) {
+      setFichasDrafts(prev => ({ ...prev, [selectedAcademia]: next[selectedAcademia] }));
+    }
+  };
+
+  const showSaved = (msg: string) => {
+    setActionErrorNotice(null);
+    setSavedNotice(msg);
+    setTimeout(() => setSavedNotice(null), 3500);
+  };
+
+  const showError = (msg: string) => {
+    setSavedNotice(null);
+    setActionErrorNotice(msg);
+  };
 
   const handleAbrirNuevoReactivo = () => {
     setEditandoReactivoIndex(null);
@@ -139,75 +158,51 @@ export const AcademicDirection: React.FC = () => {
     setModalReactivoOpen(true);
   };
 
-  const handleEliminarReactivo = (idx: number) => {
-    if (window.confirm(`¿Estás seguro de eliminar el Reactivo #${idx + 1} de este banco de preguntas?`)) {
-      const updatedReactivos = currentFicha.banco_reactivos.filter((_, i) => i !== idx);
-      const updatedFicha: FichaAcademiaReq = {
-        ...currentFicha,
-        banco_reactivos: updatedReactivos
-      };
-      setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
-      saveFichaAcademia(updatedFicha);
-
-      // Sync in-memory
-      const spec = ESPECIALIDADES.find(s => s.id === currentFicha.especialidad_id);
-      if (spec) {
-        const letraIdxMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3 };
-        spec.preguntas_quiz = updatedReactivos.map((r, i) => {
-          const isInfo = Boolean(r.es_informativa || r.correcta.toLowerCase() === 'na');
-          return {
-            id: typeof r.id === 'number' ? r.id : i + 1,
-            bloque: r.bloque,
-            pregunta: r.pregunta,
-            opciones: r.opciones,
-            respuesta_correcta: isInfo ? -1 : (letraIdxMap[r.correcta.toLowerCase()] ?? 0),
-            explicacion: r.explicacion || `La opción oficial correcta es la (${r.correcta.toUpperCase()}).`,
-            es_informativa: isInfo,
-            aspecto_evaluado: r.aspecto_evaluado
-          };
-        });
-      }
-
-      setSavedNotice(`Reactivo #${idx + 1} eliminado correctamente.`);
-      setTimeout(() => setSavedNotice(null), 3000);
+  const handleEliminarReactivoConfirmado = async (idx: number) => {
+    setConfirmDeleteReactivoIdx(null);
+    setSavingAction(true);
+    const updatedReactivos = currentFicha.banco_reactivos.filter((_, i) => i !== idx);
+    const updatedFicha: FichaAcademiaReq = {
+      ...currentFicha,
+      banco_reactivos: updatedReactivos
+    };
+    const res = await saveFichaAcademia(updatedFicha);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudo eliminar el reactivo en Firebase.');
+      return;
     }
+    setFichasDrafts(prev => {
+      const next = { ...prev };
+      delete next[selectedAcademia];
+      return next;
+    });
+    showSaved(`Reactivo #${idx + 1} eliminado en Firebase correctamente.`);
   };
 
-  const handleRestablecerReactivosOriginales = () => {
+  const handleRestablecerReactivosConfirmado = async () => {
+    setConfirmResetReactivos(false);
+    setSavingAction(true);
     const reactivosDefault = FICHAS_ACADEMIA_DEFAULT[selectedAcademia]?.banco_reactivos || [];
-    if (window.confirm(`¿Restablecer los ${reactivosDefault.length} reactivos originales sugeridos por la Academia de ${currentFicha.nombre_especialidad}?`)) {
-      const updatedFicha: FichaAcademiaReq = {
-        ...currentFicha,
-        banco_reactivos: JSON.parse(JSON.stringify(reactivosDefault))
-      };
-      setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
-      saveFichaAcademia(updatedFicha);
-
-      // Sync in-memory
-      const spec = ESPECIALIDADES.find(s => s.id === currentFicha.especialidad_id);
-      if (spec) {
-        const letraIdxMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3 };
-        spec.preguntas_quiz = reactivosDefault.map((r, i) => {
-          const isInfo = Boolean(r.es_informativa || r.correcta.toLowerCase() === 'na');
-          return {
-            id: typeof r.id === 'number' ? r.id : i + 1,
-            bloque: r.bloque,
-            pregunta: r.pregunta,
-            opciones: r.opciones,
-            respuesta_correcta: isInfo ? -1 : (letraIdxMap[r.correcta.toLowerCase()] ?? 0),
-            explicacion: r.explicacion || `La opción oficial correcta es la (${r.correcta.toUpperCase()}).`,
-            es_informativa: isInfo,
-            aspecto_evaluado: r.aspecto_evaluado
-          };
-        });
-      }
-
-      setSavedNotice(`Reactivos oficiales de ${currentFicha.nombre_especialidad} restablecidos.`);
-      setTimeout(() => setSavedNotice(null), 3000);
+    const updatedFicha: FichaAcademiaReq = {
+      ...currentFicha,
+      banco_reactivos: JSON.parse(JSON.stringify(reactivosDefault))
+    };
+    const res = await saveFichaAcademia(updatedFicha);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudieron restablecer los reactivos en Firebase.');
+      return;
     }
+    setFichasDrafts(prev => {
+      const next = { ...prev };
+      delete next[selectedAcademia];
+      return next;
+    });
+    showSaved(`Reactivos oficiales de ${currentFicha.nombre_especialidad} restablecidos en Firebase.`);
   };
 
-  const handleGuardarReactivoSubmit = (e: React.FormEvent) => {
+  const handleGuardarReactivoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setReactivoError(null);
 
@@ -244,7 +239,7 @@ export const AcademicDirection: React.FC = () => {
       )
     };
 
-    let updatedReactivos = [...currentFicha.banco_reactivos];
+    const updatedReactivos = [...currentFicha.banco_reactivos];
     if (editandoReactivoIndex === null) {
       updatedReactivos.push(nuevoReactivo);
     } else {
@@ -256,47 +251,30 @@ export const AcademicDirection: React.FC = () => {
       banco_reactivos: updatedReactivos
     };
 
-    setFichas(prev => ({ ...prev, [selectedAcademia]: updatedFicha }));
-    saveFichaAcademia(updatedFicha);
-
-    // Sync directly to in-memory ESPECIALIDADES
-    const spec = ESPECIALIDADES.find(s => s.id === currentFicha.especialidad_id);
-    if (spec) {
-      spec.preguntas_quiz = updatedReactivos.map((r, i) => ({
-        id: i + 1,
-        bloque: r.bloque,
-        pregunta: r.pregunta,
-        opciones: r.opciones,
-        respuesta_correcta: (r.es_informativa || r.correcta === 'na') ? -1 : (letraIdxMap[r.correcta.toLowerCase()] ?? 0),
-        es_informativa: r.es_informativa,
-        aspecto_evaluado: r.aspecto_evaluado,
-        explicacion: r.explicacion || (
-          r.es_informativa
-            ? 'Pregunta diagnóstica informativa (0 pts · No penaliza puntaje).'
-            : `La opción correcta oficial es la (${r.correcta.toUpperCase()}).`
-        )
-      }));
+    setSavingAction(true);
+    const res = await saveFichaAcademia(updatedFicha);
+    setSavingAction(false);
+    if (!res.success) {
+      setReactivoError(res.error || 'No se pudo guardar el reactivo en Firebase.');
+      return;
     }
 
+    setFichasDrafts(prev => {
+      const next = { ...prev };
+      delete next[selectedAcademia];
+      return next;
+    });
     setModalReactivoOpen(false);
-    setSavedNotice(editandoReactivoIndex === null ? '¡Nuevo reactivo agregado exitosamente al banco!' : '¡Reactivo actualizado exitosamente!');
-    setTimeout(() => setSavedNotice(null), 3500);
+    showSaved(editandoReactivoIndex === null ? '¡Nuevo reactivo guardado en Firebase!' : '¡Reactivo actualizado en Firebase!');
   };
 
   const handleDataChanged = () => {
-    setEstudiantesList(getEstudiantes());
-    setDocentes(getDocentes());
-    setFichas(getFichasAcademia());
-    setOficio(getOficioCircular());
-    setSavedNotice('¡Padrones y registros actualizados correctamente!');
-    setTimeout(() => setSavedNotice(null), 3500);
+    setFichasDrafts({});
+    setOficioDraft(null);
+    showSaved('¡Padrones y registros actualizados en la base única de Firebase!');
   };
 
-  const handleReloadDocentes = () => {
-    setDocentes(getDocentes());
-  };
-
-  const handleRegistrarDocenteSubmit = (e: React.FormEvent) => {
+  const handleRegistrarDocenteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setDocenteFormError(null);
 
@@ -305,8 +283,8 @@ export const AcademicDirection: React.FC = () => {
       return;
     }
 
-    if (!nuevoRfc.trim() || nuevoRfc.trim().length < 8) {
-      setDocenteFormError('Ingresa un RFC o Clave de Servidor Público válido.');
+    if (!nuevoRfc.trim() || nuevoRfc.trim().length < 10) {
+      setDocenteFormError('Ingresa un RFC válido (mínimo 10 caracteres).');
       return;
     }
 
@@ -317,7 +295,8 @@ export const AcademicDirection: React.FC = () => {
 
     const cleanCorreo = nuevoCorreo.trim() || `${nuevoNombre.toLowerCase().split(' ')[0]}.${nuevoRfc.slice(-4).toLowerCase()}@cetis7.edu.mx`;
 
-    const result = registrarNuevoDocente({
+    setSavingAction(true);
+    const result = await registrarNuevoDocente({
       nombre_completo: nuevoNombre.trim(),
       rfc: nuevoRfc.trim().toUpperCase(),
       correo_institucional: cleanCorreo,
@@ -327,16 +306,14 @@ export const AcademicDirection: React.FC = () => {
       estatus_autorizacion: nuevoEstatus,
       registrado_por: 'Administrador DGETI'
     });
+    setSavingAction(false);
 
     if (!result.success) {
-      setDocenteFormError(result.error || 'Ocurrió un error al registrar el docente.');
+      setDocenteFormError(result.error || 'Ocurrió un error al registrar el docente en Firebase.');
       return;
     }
 
-    setDocentes(getDocentes());
-    setDocenteSuccessNotice(`¡Profesor ${result.docente?.nombre_completo} registrado exitosamente como ${result.docente?.estatus_autorizacion}!`);
-    
-    // Reset form
+    setDocenteSuccessNotice(`¡Profesor ${result.docente?.nombre_completo} guardado en Firebase como ${result.docente?.estatus_autorizacion}!`);
     setNuevoNombre('');
     setNuevoRfc('');
     setNuevoCorreo('');
@@ -347,15 +324,26 @@ export const AcademicDirection: React.FC = () => {
     setTimeout(() => setDocenteSuccessNotice(null), 4000);
   };
 
-  const handleCambiarEstatusDocenteClick = (id: string, nuevoEst: 'AUTORIZADO' | 'PENDIENTE' | 'REVOCADO') => {
-    cambiarEstatusDocente(id, nuevoEst);
-    handleReloadDocentes();
+  const handleCambiarEstatusDocenteClick = async (id: string, nuevoEst: 'AUTORIZADO' | 'PENDIENTE' | 'REVOCADO') => {
+    setSavingAction(true);
+    const res = await cambiarEstatusDocente(id, nuevoEst);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudo actualizar el estatus del docente en Firebase.');
+    } else {
+      showSaved(`Estatus actualizado a ${nuevoEst}.`);
+    }
   };
 
-  const handleEliminarDocenteClick = (id: string, nombre: string) => {
-    if (window.confirm(`¿Estás seguro de eliminar a ${nombre} del padrón de profesores autorizados?`)) {
-      eliminarDocente(id);
-      handleReloadDocentes();
+  const handleEliminarDocenteConfirmado = async (id: string) => {
+    setConfirmDeleteDocenteId(null);
+    setSavingAction(true);
+    const res = await eliminarDocente(id);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudo eliminar el docente de Firebase.');
+    } else {
+      showSaved('Docente eliminado de la base única de Firebase.');
     }
   };
 
@@ -368,75 +356,51 @@ export const AcademicDirection: React.FC = () => {
 
   const handleCopiarClave = (clave: string) => {
     navigator.clipboard.writeText(clave);
-    setCopyNotice(`Clave "${clave}" copiada al portapapeles.`);
+    setCopyNotice('Clave copiada al portapapeles.');
     setTimeout(() => setCopyNotice(null), 2500);
   };
 
   const docentesFiltrados = docentes.filter(d => {
     const matchesSearch = d.nombre_completo.toLowerCase().includes(searchDocente.toLowerCase()) ||
                           d.rfc.toLowerCase().includes(searchDocente.toLowerCase()) ||
-                          d.correo_institucional.toLowerCase().includes(searchDocente.toLowerCase()) ||
-                          d.clave_acceso.toLowerCase().includes(searchDocente.toLowerCase());
+                          d.correo_institucional.toLowerCase().includes(searchDocente.toLowerCase());
     const matchesAcademia = filterDocenteAcademia === 'TODAS' || d.academia === filterDocenteAcademia;
     const matchesEstatus = filterDocenteEstatus === 'TODOS' || d.estatus_autorizacion === filterDocenteEstatus;
     return matchesSearch && matchesAcademia && matchesEstatus;
   });
 
-
   // Calculate statistics
-  const totalInscritos = estudiantes.length;
-  let virtualCompletados = 0;
   let tutoresVerificadosCount = 0;
-  const distribucionVocacional: Record<string, number> = { programacion: 0, comercio: 0, rrhh: 0, cosmetologia: 0 };
-
   estudiantes.forEach(est => {
     if (est.tutor?.verificado) tutoresVerificadosCount++;
-    const prog = getProgresoVirtual(est.num_control);
-    if (prog.estatus_fase_virtual === 'COMPLETADO') virtualCompletados++;
-    const evalVoc = getEvaluacionVocacional(est.num_control);
-    if (evalVoc?.carrera_sugerida) {
-      distribucionVocacional[evalVoc.carrera_sugerida] = (distribucionVocacional[evalVoc.carrera_sugerida] || 0) + 1;
-    }
   });
 
-  const handleSaveFicha = () => {
-    saveFichaAcademia(currentFicha);
-
-    // Sync to in-memory ESPECIALIDADES so student views reflect updates immediately
-    const spec = ESPECIALIDADES.find(s => s.id === currentFicha.especialidad_id);
-    if (spec) {
-      if (currentFicha.recursos_multimedia.video_academia) {
-        spec.video_academia = currentFicha.recursos_multimedia.video_academia;
-      }
-      if (currentFicha.recursos_multimedia.galeria_alumnos) {
-        spec.galeria_alumnos = currentFicha.recursos_multimedia.galeria_alumnos;
-      }
-      if (currentFicha.banco_reactivos && currentFicha.banco_reactivos.length > 0) {
-        const letraIdxMap: Record<string, number> = { a: 0, b: 1, c: 2, d: 3 };
-        spec.preguntas_quiz = currentFicha.banco_reactivos.map((r, i) => {
-          const isInfo = Boolean(r.es_informativa || r.correcta.toLowerCase() === 'na');
-          return {
-            id: typeof r.id === 'number' ? r.id : i + 1,
-            bloque: r.bloque,
-            pregunta: r.pregunta,
-            opciones: r.opciones,
-            respuesta_correcta: isInfo ? -1 : (letraIdxMap[r.correcta.toLowerCase()] ?? 0),
-            explicacion: r.explicacion || `La opción oficial correcta es la (${r.correcta.toUpperCase()}).`,
-            es_informativa: isInfo,
-            aspecto_evaluado: r.aspecto_evaluado
-          };
-        });
-      }
+  const handleSaveFicha = async () => {
+    setSavingAction(true);
+    const res = await saveFichaAcademia(currentFicha);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudo guardar la Ficha de Academia en Firebase.');
+      return;
     }
-
-    setSavedNotice('Ficha de Academia guardada y sincronizada con éxito con la plataforma de estudiantes.');
-    setTimeout(() => setSavedNotice(null), 3500);
+    setFichasDrafts(prev => {
+      const next = { ...prev };
+      delete next[selectedAcademia];
+      return next;
+    });
+    showSaved('Ficha de Academia guardada en la base única de Firebase.');
   };
 
-  const handleSaveOficio = () => {
-    saveOficioCircular(oficio);
-    setSavedNotice('Oficio Circular actualizado.');
-    setTimeout(() => setSavedNotice(null), 3000);
+  const handleSaveOficio = async () => {
+    setSavingAction(true);
+    const res = await saveOficioCircular(oficio);
+    setSavingAction(false);
+    if (!res.success) {
+      showError(res.error || 'No se pudo guardar el Oficio Circular en Firebase.');
+      return;
+    }
+    setOficioDraft(null);
+    showSaved('Oficio Circular actualizado en Firebase.');
   };
 
   const handleExportCSV = () => {
@@ -459,9 +423,9 @@ export const AcademicDirection: React.FC = () => {
       'Empate_Detectado'
     ];
     const rows = estudiantes.map(e => {
-      const prog = getProgresoVirtual(e.num_control);
-      const evalVoc = getEvaluacionVocacional(e.num_control);
-      const pts = evalVoc?.puntajes_especialidad;
+      const prog = dbSnapshot.progresos[e.num_control] || getProgresoVirtual(e.num_control);
+      const evalVoc = dbSnapshot.evaluaciones[e.num_control] || null;
+      const pts = evalVoc ? deriveVocationalMetrics(evalVoc).puntajes : null;
       return [
         `"${e.num_control}"`,
         `"${e.nombre_completo}"`,
@@ -687,8 +651,24 @@ export const AcademicDirection: React.FC = () => {
 
       {savedNotice && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          {savedNotice}
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{savedNotice}</span>
+        </div>
+      )}
+
+      {actionErrorNotice && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-900 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{actionErrorNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionErrorNotice(null)}
+            className="text-red-700 hover:text-red-900 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -1214,15 +1194,36 @@ export const AcademicDirection: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-center">
-                    <button
-                      type="button"
-                      onClick={handleRestablecerReactivosOriginales}
-                      title="Restablecer los reactivos originales sugeridos para esta academia"
-                      className="px-2.5 py-1 text-[11px] font-semibold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 rounded-lg transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
-                    >
-                      <RotateCcw className="w-3 h-3 text-stone-500" />
-                      <span>Restablecer</span>
-                    </button>
+                    {confirmResetReactivos ? (
+                      <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-2 py-1 rounded-lg text-[11px]">
+                        <span className="font-semibold text-amber-950">¿Restablecer oficiales?</span>
+                        <button
+                          type="button"
+                          disabled={savingAction}
+                          onClick={() => void handleRestablecerReactivosConfirmado()}
+                          className="px-2 py-0.5 bg-amber-700 text-white rounded font-bold cursor-pointer"
+                        >
+                          Sí
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmResetReactivos(false)}
+                          className="px-2 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmResetReactivos(true)}
+                        title="Restablecer los reactivos originales sugeridos para esta academia"
+                        className="px-2.5 py-1 text-[11px] font-semibold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 rounded-lg transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3 text-stone-500" />
+                        <span>Restablecer</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -1279,14 +1280,34 @@ export const AcademicDirection: React.FC = () => {
                               <Edit3 className="w-3 h-3 text-stone-600" />
                               <span>Editar</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleEliminarReactivo(rIdx)}
-                              className="p-1 text-stone-400 hover:text-red-700 hover:bg-red-50 rounded transition-colors cursor-pointer"
-                              title="Eliminar este reactivo"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmDeleteReactivoIdx === rIdx ? (
+                              <div className="flex items-center gap-1 bg-red-50 border border-red-300 px-1.5 py-0.5 rounded text-[10px]">
+                                <button
+                                  type="button"
+                                  disabled={savingAction}
+                                  onClick={() => void handleEliminarReactivoConfirmado(rIdx)}
+                                  className="px-1.5 py-0.5 bg-red-700 text-white rounded font-bold cursor-pointer"
+                                >
+                                  Eliminar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteReactivoIdx(null)}
+                                  className="px-1.5 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteReactivoIdx(rIdx)}
+                                className="p-1 text-stone-400 hover:text-red-700 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                                title="Eliminar este reactivo"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -1542,8 +1563,8 @@ export const AcademicDirection: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-stone-200">
                   {filteredEstudiantes.map(est => {
-                    const prog = getProgresoVirtual(est.num_control);
-                    const evalVoc = getEvaluacionVocacional(est.num_control);
+                    const prog = dbSnapshot.progresos[est.num_control] || getProgresoVirtual(est.num_control);
+                    const evalVoc = dbSnapshot.evaluaciones[est.num_control] || null;
                     const isVirtualDone = prog.estatus_fase_virtual === 'COMPLETADO';
                     const isTutorOk = est.tutor?.verificado;
 
@@ -1593,9 +1614,10 @@ export const AcademicDirection: React.FC = () => {
                               type="button"
                               onClick={async () => {
                                 await sincronizarBaseDeDatosCETis7().catch(() => undefined);
+                                const latestEval = getDbStoreSnapshot().evaluaciones[est.num_control] || evalVoc;
                                 setAlumnoInspeccionVocacional({
                                   estudiante: est,
-                                  evaluacion: getEvaluacionVocacional(est.num_control)
+                                  evaluacion: latestEval
                                 });
                               }}
                               className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#721B32]/10 hover:bg-[#721B32]/20 text-[#721B32] text-[10px] font-bold transition-colors cursor-pointer"
@@ -1927,7 +1949,7 @@ export const AcademicDirection: React.FC = () => {
               <div className="relative w-full sm:w-64">
                 <input
                   type="text"
-                  placeholder="Buscar docente por nombre, RFC o PIN..."
+                  placeholder="Buscar docente por nombre o RFC..."
                   value={searchDocente}
                   onChange={e => setSearchDocente(e.target.value)}
                   className="w-full pl-8 pr-3 py-1.5 border border-stone-300 rounded-lg bg-stone-50 focus:bg-white focus:outline-none"
@@ -2050,7 +2072,8 @@ export const AcademicDirection: React.FC = () => {
                             {!isAutorizado && (
                               <button
                                 type="button"
-                                onClick={() => handleCambiarEstatusDocenteClick(doc.id, 'AUTORIZADO')}
+                                disabled={savingAction}
+                                onClick={() => void handleCambiarEstatusDocenteClick(doc.id, 'AUTORIZADO')}
                                 className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold transition-colors cursor-pointer flex items-center gap-1"
                                 title="Aprobar acceso a Dirección"
                               >
@@ -2061,7 +2084,8 @@ export const AcademicDirection: React.FC = () => {
                             {!isPendiente && (
                               <button
                                 type="button"
-                                onClick={() => handleCambiarEstatusDocenteClick(doc.id, 'PENDIENTE')}
+                                disabled={savingAction}
+                                onClick={() => void handleCambiarEstatusDocenteClick(doc.id, 'PENDIENTE')}
                                 className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded text-[10px] font-bold transition-colors cursor-pointer"
                                 title="Marcar como pendiente"
                               >
@@ -2071,21 +2095,42 @@ export const AcademicDirection: React.FC = () => {
                             {!isRevocado && (
                               <button
                                 type="button"
-                                onClick={() => handleCambiarEstatusDocenteClick(doc.id, 'REVOCADO')}
+                                disabled={savingAction}
+                                onClick={() => void handleCambiarEstatusDocenteClick(doc.id, 'REVOCADO')}
                                 className="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-900 border border-red-300 rounded text-[10px] font-bold transition-colors cursor-pointer"
                                 title="Revocar acceso"
                               >
                                 Revocar
                               </button>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => handleEliminarDocenteClick(doc.id, doc.nombre_completo)}
-                              className="p-1 text-stone-400 hover:text-red-700 rounded transition-colors cursor-pointer ml-1"
-                              title="Eliminar de padrón"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmDeleteDocenteId === doc.id ? (
+                              <div className="flex items-center gap-1 bg-red-50 border border-red-300 px-1.5 py-0.5 rounded text-[10px] ml-1">
+                                <button
+                                  type="button"
+                                  disabled={savingAction}
+                                  onClick={() => void handleEliminarDocenteConfirmado(doc.id)}
+                                  className="px-1.5 py-0.5 bg-red-700 text-white rounded font-bold cursor-pointer"
+                                >
+                                  Eliminar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteDocenteId(null)}
+                                  className="px-1.5 py-0.5 bg-white border border-stone-300 text-stone-700 rounded cursor-pointer"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteDocenteId(doc.id)}
+                                className="p-1 text-stone-400 hover:text-red-700 rounded transition-colors cursor-pointer ml-1"
+                                title="Eliminar de padrón"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

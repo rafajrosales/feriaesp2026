@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Estudiante, TutorLegal } from '../types';
-import { registrarNuevoEstudiante, validarCURP, getEstudianteByCURP } from '../services/storage';
-import { UserPlus, Sparkles, Mail, Phone, School, Check, X, Shield, ArrowRight, ArrowLeft } from 'lucide-react';
+import { registrarNuevoEstudiante, validarCURP } from '../services/storage';
+import { cloudCheckCurpAvailable, cloudCheckNumControlAvailable, hasVerifiedFirebaseUser } from '../services/firebase';
+import { UserPlus, Mail, Phone, Check, X, Shield, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 interface StudentSelfRegistrationModalProps {
@@ -17,7 +18,6 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
 }) => {
   const [paso, setPaso] = useState<1 | 2>(1);
 
-  // Paso 1: Estudiante
   const [nombreCompleto, setNombreCompleto] = useState('');
   const [numControl, setNumControl] = useState('');
   const [curp, setCurp] = useState('');
@@ -25,13 +25,13 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
   const [turno, setTurno] = useState<'MATUTINO' | 'VESPERTINO'>('MATUTINO');
   const [telefonoAlumno, setTelefonoAlumno] = useState('');
 
-  // Paso 2: Papá o Tutor
   const [nombreTutor, setNombreTutor] = useState('');
   const [parentesco, setParentesco] = useState<'Padre' | 'Madre' | 'Tutor Legal'>('Padre');
   const [correoTutor, setCorreoTutor] = useState('');
   const [telefonoTutor, setTelefonoTutor] = useState('');
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
@@ -49,9 +49,14 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
     setTelefonoTutor('55 9876 5432');
   };
 
-  const handleNextPaso = (e: React.FormEvent) => {
+  const handleNextPaso = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    if (!hasVerifiedFirebaseUser()) {
+      setErrorMsg('Debes tener una sesión de Google verificada y conexión en línea con Firebase para registrar alumnos.');
+      return;
+    }
 
     if (!nombreCompleto.trim() || nombreCompleto.trim().length < 5) {
       setErrorMsg('Por favor escribe tu nombre completo (nombre y apellidos).');
@@ -64,21 +69,37 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
       return;
     }
 
-    const existingByCurp = getEstudianteByCURP(curp.trim().toUpperCase());
-    if (existingByCurp) {
-      setErrorMsg(`Esta CURP ya se encuentra registrada a nombre de ${existingByCurp.nombre_completo}. Solo se permite un registro por alumno.`);
-      return;
-    }
-
     if (!numControl.trim() || numControl.trim().length < 8) {
       setErrorMsg('El número de control debe contener al menos 8 a 14 dígitos.');
       return;
     }
 
-    setPaso(2);
+    setSubmitting(true);
+    try {
+      const [curpCheck, ncCheck] = await Promise.all([
+        cloudCheckCurpAvailable(curp),
+        cloudCheckNumControlAvailable(numControl)
+      ]);
+
+      if (!curpCheck.available) {
+        setErrorMsg(`Esta CURP ya se encuentra registrada en la base única de Firebase (Núm. Control: ${curpCheck.numControl || 'asignado'}). Solo se permite un registro por alumno.`);
+        return;
+      }
+
+      if (!ncCheck.available) {
+        setErrorMsg(`El Número de Control "${numControl.trim()}" ya se encuentra asignado en Firebase.`);
+        return;
+      }
+
+      setPaso(2);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudo validar la disponibilidad en Firebase.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleFinalizarRegistro = (e: React.FormEvent) => {
+  const handleFinalizarRegistro = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -111,30 +132,34 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
       tutor: tutorObj
     };
 
-    const result = registrarNuevoEstudiante(nuevoEstudiante);
-    if (!result.success) {
-      setErrorMsg(result.error || 'Error al registrar alumno.');
-      return;
-    }
-
+    setSubmitting(true);
     try {
-      confetti({
-        particleCount: 50,
-        spread: 60,
-        origin: { y: 0.6 }
-      });
-    } catch {
-      // Safe ignore
-    }
+      const result = await registrarNuevoEstudiante(nuevoEstudiante);
+      if (!result.success) {
+        setErrorMsg(result.error || 'Error al registrar alumno en Firebase.');
+        return;
+      }
 
-    onStudentRegistered(result.estudiante || nuevoEstudiante);
-    onClose();
+      try {
+        confetti({
+          particleCount: 50,
+          spread: 60,
+          origin: { y: 0.6 }
+        });
+      } catch {
+        // Safe ignore
+      }
+
+      onStudentRegistered(result.estudiante || nuevoEstudiante);
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-start sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
       <div className="bg-white sm:rounded-2xl border-0 sm:border border-stone-200 max-w-lg w-full shadow-2xl overflow-hidden min-h-full sm:min-h-0 sm:my-6 flex flex-col">
-        {/* Header */}
         <div className="bg-[#721B32] p-4 sm:p-5 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white/10 flex items-center justify-center text-amber-200 shrink-0">
@@ -142,14 +167,15 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
             </div>
             <div className="min-w-0">
               <span className="text-[10px] sm:text-[11px] uppercase tracking-wider text-amber-200 font-semibold block truncate">
-                CETis No. 7 "Miguel Lerdo de Tejada"
+                CETis No. 7 &quot;Miguel Lerdo de Tejada&quot;
               </span>
               <h3 className="text-sm sm:text-base font-bold text-white leading-tight">
-                Registro de Alumno (1.er Semestre)
+                Registro de Alumno (Base Única Firebase)
               </h3>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
           >
@@ -157,7 +183,6 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
           </button>
         </div>
 
-        {/* Stepper indicator */}
         <div className="bg-stone-50 border-b border-stone-200 px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs font-semibold shrink-0">
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
             <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 ${
@@ -186,11 +211,9 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
           </div>
         </div>
 
-        {/* Form Body */}
-        {/* Form Body */}
         <div className="p-3.5 sm:p-6 flex-1 overflow-y-auto">
           {paso === 1 ? (
-            <form onSubmit={handleNextPaso} className="space-y-3.5 sm:space-y-4 text-xs">
+            <form onSubmit={e => void handleNextPaso(e)} className="space-y-3.5 sm:space-y-4 text-xs">
               <div className="flex flex-wrap items-center justify-between text-[11px] text-stone-500 gap-1">
                 <span>Ingresa tus datos escolares oficiales:</span>
                 <button
@@ -247,7 +270,6 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
                 </div>
               </div>
 
-              {/* Turno Segmented Control */}
               <div>
                 <label className="font-bold text-stone-800 block mb-1.5">Turno Asignado *</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -276,7 +298,6 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
                 </div>
               </div>
 
-              {/* Grupo Grid Selector */}
               <div>
                 <label className="font-bold text-stone-800 block mb-1.5">Grupo (1.° Semestre) *</label>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
@@ -311,7 +332,7 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
               </div>
 
               {errorMsg && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-900 text-xs sm:text-sm font-medium animate-in fade-in">
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-900 text-xs sm:text-sm font-medium">
                   {errorMsg}
                 </div>
               )}
@@ -326,26 +347,27 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
                 </button>
                 <button
                   type="submit"
-                  className="w-full sm:w-auto px-5 py-3.5 sm:py-2.5 bg-[#721B32] hover:bg-[#5b1528] active:bg-[#4a1020] active:scale-[0.99] text-white rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
+                  disabled={submitting}
+                  className="w-full sm:w-auto px-5 py-3.5 sm:py-2.5 bg-[#721B32] hover:bg-[#5b1528] disabled:opacity-60 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
                 >
-                  <span>Siguiente: Datos de Papá o Tutor</span>
-                  <ArrowRight className="w-4 h-4 shrink-0" />
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  <span>{submitting ? 'Verificando en Firebase...' : 'Siguiente: Datos de Papá o Tutor'}</span>
+                  {!submitting && <ArrowRight className="w-4 h-4 shrink-0" />}
                 </button>
               </div>
             </form>
           ) : (
-            <form onSubmit={handleFinalizarRegistro} className="space-y-4 text-xs">
+            <form onSubmit={e => void handleFinalizarRegistro(e)} className="space-y-4 text-xs">
               <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 leading-relaxed space-y-1">
                 <span className="font-bold flex items-center gap-1 text-xs sm:text-sm text-amber-950">
                   <Shield className="w-4 h-4 text-amber-700 shrink-0" />
                   <span>¿Por qué necesitamos el correo de tu papá o tutor?</span>
                 </span>
                 <p className="text-xs text-amber-950">
-                  El sistema del CETis 7 vinculará este correo oficial en la base de datos. <strong>Tu Pase Digital QR solo podrá imprimirse cuando tu papá o tutor confirme y firme digitalmente con su correo.</strong>
+                  El sistema del CETis 7 vinculará este correo oficial en la base única de Firebase. <strong>Tu Pase Digital QR solo podrá imprimirse cuando tu papá o tutor confirme y firme digitalmente.</strong>
                 </p>
               </div>
 
-              {/* Parentesco Segmented Control */}
               <div>
                 <label className="font-bold text-stone-800 block mb-1.5">Parentesco con el Alumno *</label>
                 <div className="grid grid-cols-3 gap-2">
@@ -421,7 +443,7 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
               </div>
 
               {errorMsg && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-900 text-xs sm:text-sm font-medium animate-in fade-in">
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-900 text-xs sm:text-sm font-medium">
                   {errorMsg}
                 </div>
               )}
@@ -429,6 +451,7 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
               <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-3 border-t border-stone-200">
                 <button
                   type="button"
+                  disabled={submitting}
                   onClick={() => setPaso(1)}
                   className="w-full sm:w-auto px-4 py-3 sm:py-2.5 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                 >
@@ -437,10 +460,11 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
                 </button>
                 <button
                   type="submit"
-                  className="w-full sm:w-auto px-6 py-3.5 sm:py-2.5 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 active:scale-[0.99] text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  disabled={submitting}
+                  className="w-full sm:w-auto px-6 py-3.5 sm:py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
                 >
-                  <Check className="w-5 h-5" />
-                  <span>Completar Registro Oficial</span>
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-5 h-5" />}
+                  <span>{submitting ? 'Guardando en Firebase...' : 'Completar Registro Oficial'}</span>
                 </button>
               </div>
             </form>
