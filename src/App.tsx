@@ -23,7 +23,7 @@ import {
   FIREBASE_PROJECT_ID
 } from './services/firebase';
 import type { User } from 'firebase/auth';
-import { Estudiante, ProgresoVirtual, EvaluacionVocacional, DocenteAcceso } from './types';
+import { Estudiante, ProgresoVirtual, EvaluacionVocacional, DocenteAcceso, SpecialtyId } from './types';
 import { Header, MainNavTab } from './components/Header';
 import { StudentProfileBanner } from './components/StudentProfileBanner';
 import { VocationalDiagnostic } from './components/VocationalDiagnostic';
@@ -40,6 +40,7 @@ export default function App() {
   const dbSnapshot = useSyncExternalStore(subscribeDbStore, getDbStoreSnapshot);
 
   const [activeTab, setActiveTab] = useState<MainNavTab>('vocacional');
+  const [selectedSpecialtyOverride, setSelectedSpecialtyOverride] = useState<SpecialtyId | undefined>(undefined);
   const [sesionActiva, setSesionActivaState] = useState<SesionUsuario | null>(() => getSesionActiva());
   const [estudianteActivoNC, setEstudianteActivoNCState] = useState<string>(() => getEstudianteActivoNC());
   const [mostrarTutorial, setMostrarTutorial] = useState<boolean>(false);
@@ -129,6 +130,13 @@ export default function App() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, [Boolean(sesionActiva), activeTab]);
+
+  // Automatically redirect student to Digital Pass QR tab when 100% progress is achieved
+  useEffect(() => {
+    if (sesionActiva?.tipo === 'alumno' && progresoActual.porcentaje_virtual >= 100 && activeTab !== 'pase_qr' && activeTab !== 'direccion') {
+      setActiveTab('pase_qr');
+    }
+  }, [progresoActual.porcentaje_virtual, sesionActiva?.tipo, activeTab]);
 
   const handleGoogleSignIn = async () => {
     setAuthLoading(true);
@@ -478,6 +486,11 @@ export default function App() {
                 numControl={estudianteActual.num_control}
                 evaluacionExistente={evaluacionActual}
                 onCompletar={handleCompletarEvaluacionVocacional}
+                progreso={progresoActual}
+                onNavigateToSpecialty={(sId) => {
+                  setSelectedSpecialtyOverride(sId);
+                  setActiveTab('modulos');
+                }}
               />
 
               {evaluacionActual && (
@@ -523,7 +536,7 @@ export default function App() {
             <SpecialtyModules
               progreso={progresoActual}
               onUpdateProgreso={handleUpdateProgreso}
-              sugeridaId={evaluacionActual?.carrera_sugerida}
+              sugeridaId={selectedSpecialtyOverride || evaluacionActual?.carrera_sugerida}
               onNavigateToDirection={() => handleNavTabChange('direccion')}
               sesionActiva={sesionActiva}
             />

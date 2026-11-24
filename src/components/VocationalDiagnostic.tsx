@@ -7,7 +7,8 @@ import {
   EvaluacionVocacional,
   LetraOpcionVocacional,
   ParteVocacionalId,
-  SpecialtyId
+  SpecialtyId,
+  ProgresoVirtual
 } from '../types';
 import {
   evaluarTestVocacional40,
@@ -33,12 +34,16 @@ interface VocationalDiagnosticProps {
   numControl: string;
   evaluacionExistente: EvaluacionVocacional | null;
   onCompletar: (evaluacion: EvaluacionVocacional) => void;
+  onNavigateToSpecialty?: (specialtyId: SpecialtyId) => void;
+  progreso?: ProgresoVirtual;
 }
 
 export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
   numControl,
   evaluacionExistente,
-  onCompletar
+  onCompletar,
+  onNavigateToSpecialty,
+  progreso
 }) => {
   const [respuestas, setRespuestas] = useState<Record<number, LetraOpcionVocacional>>({});
   const [parteActiva, setParteActiva] = useState<ParteVocacionalId>(1);
@@ -534,6 +539,53 @@ export const VocationalDiagnostic: React.FC<VocationalDiagnosticProps> = ({
                   Lema: {COMIC_ASSETS.especialidades[evaluacionActual.carrera_sugerida].motto}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Guided Navigation & Requirements Checklist */}
+          {progreso && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-xs font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-[#721B32]" />
+                  Recorrido Guiado: Avance Actual ({progreso.porcentaje_virtual}% / 100%)
+                </span>
+                <span className="text-xs font-mono-code font-semibold text-amber-900 bg-amber-100/80 px-2.5 py-1 rounded-md">
+                  {progreso.porcentaje_virtual >= 100 ? '✓ ¡100% Completado (Constancia Lista)!' : 'Completa los 4 cuestionarios para el 100%'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-xs">
+                <div className={`p-2.5 rounded-lg border flex items-center justify-between ${progreso.test_vocacional_completado ? 'bg-emerald-50 border-emerald-200 text-emerald-950 font-medium' : 'bg-white border-amber-200 text-stone-800'}`}>
+                  <span>Test Vocacional (20%)</span>
+                  <span className="font-bold">{progreso.test_vocacional_completado ? '✓ Listo' : 'Pendiente'}</span>
+                </div>
+                {(['programacion', 'comercio', 'rrhh', 'cosmetologia'] as SpecialtyId[]).map(sId => {
+                  const sp = progreso.progreso_especialidades[sId];
+                  const done = Boolean(sp?.quiz_aprobado || (sp?.puntaje_maximo ?? 0) > 0);
+                  return (
+                    <div key={sId} className={`p-2.5 rounded-lg border flex items-center justify-between ${done ? 'bg-emerald-50 border-emerald-200 text-emerald-950 font-medium' : 'bg-white border-amber-200 text-stone-800'}`}>
+                      <span className="truncate">{nombreEspecialidad(sId).split(' ')[0]} (20%)</span>
+                      <span className="font-bold">{done ? '✓ Listo' : 'Pendiente'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {onNavigateToSpecialty && (
+                <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-amber-200">
+                  <div className="text-xs text-amber-950">
+                    💡 <strong>Te llevamos de la mano:</strong> Tu opción más afín según tus resultados es <strong>{nombreEspecialidad(evaluacionActual.carrera_sugerida)}</strong>. Resuelve su cuestionario para avanzar al siguiente nivel.
+                  </div>
+                  <button
+                    onClick={() => onNavigateToSpecialty(evaluacionActual.carrera_sugerida)}
+                    className="px-4 py-2.5 text-xs font-bold text-white bg-[#721B32] hover:bg-[#5b1528] rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <span>Ir al Taller y Cuestionario de {nombreEspecialidad(evaluacionActual.carrera_sugerida).split(' ')[0]}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

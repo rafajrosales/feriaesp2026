@@ -1240,15 +1240,15 @@ export async function saveProgresoVirtual(
   const careers: SpecialtyId[] = ['programacion', 'comercio', 'rrhh', 'cosmetologia'];
   careers.forEach(c => {
     const sp = cloneProgreso.progreso_especialidades[c];
-    if (sp.video_visto) pct += 4;
-    if (sp.infografia_explorada) pct += 4;
-    if (sp.proyectos_revisados) pct += 4;
     const quizDone = Boolean(sp.quiz_aprobado || (sp.puntaje_maximo ?? 0) > 0);
+    const moduleDone = quizDone || sp.video_visto || sp.infografia_explorada || sp.proyectos_revisados;
     if (quizDone) {
       sp.quiz_aprobado = true;
-      pct += 8;
       totalQuizScores += sp.calificacion_quiz;
       quizesCompleted++;
+    }
+    if (quizDone || moduleDone) {
+      pct += 20;
     }
   });
 
