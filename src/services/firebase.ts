@@ -48,7 +48,6 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 function createFirestoreInstance(): Firestore {
   const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
   try {
-    // 100% online memoryLocalCache with experimentalForceLongPolling to avoid 10s WebSocket timeouts in preview/proxy environments
     return initializeFirestore(
       app,
       {
@@ -143,8 +142,43 @@ let inFlightConnectionTest: Promise<boolean> | null = null;
 let lastConnectionResult: { ok: boolean; checkedAt: number } | null = null;
 const CONNECTION_CACHE_MS = 10000;
 
+async function checkFirestoreRestReachable(): Promise<boolean> {
+  if (
+    !firebaseConfig.projectId ||
+    !firebaseConfig.apiKey ||
+    firebaseConfig.projectId === 'remixed-project-id'
+  ) {
+    return false;
+  }
+  try {
+    const dbId = encodeURIComponent(firebaseConfig.firestoreDatabaseId || '(default)');
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      firebaseConfig.projectId
+    )}/databases/${dbId}/documents/${COLLECTIONS.CONFIGURACION}/${CONFIG_OFICIO_ID}?key=${encodeURIComponent(
+      firebaseConfig.apiKey
+    )}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, { method: 'GET', signal: controller.signal });
+    clearTimeout(timer);
+    // 200, 403 (permission-denied), or 404 (not-found) all prove Firestore backend is reachable and configured
+    return res.status === 200 || res.status === 403 || res.status === 404;
+  } catch {
+    return false;
+  }
+}
+
 export async function testConnection(forceRefresh = false): Promise<boolean> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    lastConnectionResult = { ok: false, checkedAt: Date.now() };
+    return false;
+  }
+  if (
+    !firebaseConfig.projectId ||
+    !firebaseConfig.apiKey ||
+    firebaseConfig.projectId === 'remixed-project-id'
+  ) {
+    console.error('Please check your Firebase configuration.');
     lastConnectionResult = { ok: false, checkedAt: Date.now() };
     return false;
   }
@@ -158,7 +192,7 @@ export async function testConnection(forceRefresh = false): Promise<boolean> {
   inFlightConnectionTest = (async () => {
     try {
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('the client is offline - connection timed out')), 8000)
+        setTimeout(() => reject(new Error('firestore-connection-timeout')), 12000)
       );
       await Promise.race([
         getDocFromServer(doc(db, 'test', 'connection')),
@@ -167,8 +201,14 @@ export async function testConnection(forceRefresh = false): Promise<boolean> {
       lastConnectionResult = { ok: true, checkedAt: Date.now() };
       return true;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('the client is offline')) {
-        console.error('Please check your Firebase configuration.');
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('the client is offline') || msg === 'firestore-connection-timeout') {
+        const restReachable = await checkFirestoreRestReachable();
+        if (restReachable) {
+          lastConnectionResult = { ok: true, checkedAt: Date.now() };
+          return true;
+        }
+        console.warn('Firestore backend unreachable or timed out:', msg);
         lastConnectionResult = { ok: false, checkedAt: Date.now() };
         return false;
       }

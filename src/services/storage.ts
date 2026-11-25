@@ -55,7 +55,6 @@ import {
   normalizeDocenteEmail,
   requireOnlineFirebase,
   subscribeAppDatabase,
-  subscribePublicCollections,
   testConnection
 } from './firebase';
 
@@ -228,7 +227,7 @@ const initialDbState: OnlineDbState = {
 let dbState: OnlineDbState = { ...initialDbState };
 const storeListeners = new Set<() => void>();
 let activeUnsubscribe: (() => void) | null = null;
-let publicUnsubscribe: (() => void) | null = null;
+let publicHydrationStarted = false;
 let connectedUserUid: string | null = null;
 let inFlightConnect: { key: string; promise: Promise<ResultadoSyncBD> } | null = null;
 
@@ -243,32 +242,37 @@ function updateDbState(patch: Partial<OnlineDbState>) {
 
 export function iniciarSuscripcionPublica(): void {
   if (typeof window === 'undefined') return;
-  if (publicUnsubscribe) return;
+  if (publicHydrationStarted) return;
+  publicHydrationStarted = true;
 
-  publicUnsubscribe = subscribePublicCollections({
-    onDocentes: cloudList => {
-      if (cloudList && cloudList.length > 0) {
-        const map = new Map<string, DocenteAutorizado>();
-        DOCENTES_INICIALES.forEach(d => map.set(d.id, d));
-        cloudList.forEach(d => {
-          if (d && d.id) map.set(d.id, d);
-        });
-        const merged = Array.from(map.values());
-        updateDbState({ docentes: merged });
-        persistDocentesCache(merged);
-      }
-    },
-    onFichas: cloudFichas => {
-      if (cloudFichas && Object.keys(cloudFichas).length > 0) {
-        updateDbState({
-          fichas: { ...FICHAS_ACADEMIA_DEFAULT, ...cloudFichas }
-        });
-      }
-    },
-    onOficio: cloudOficio => {
-      if (cloudOficio) {
-        updateDbState({ oficio: cloudOficio });
-      }
+  void Promise.all([
+    cloudFetchDocentes().catch(() => [] as DocenteAutorizado[]),
+    cloudFetchFichas().catch(() => ({} as Record<string, FichaAcademiaReq>)),
+    cloudFetchOficio().catch(() => null)
+  ]).then(([cloudList, cloudFichas, cloudOficio]) => {
+    const patch: Partial<OnlineDbState> = {};
+
+    if (cloudList && cloudList.length > 0) {
+      const map = new Map<string, DocenteAutorizado>();
+      DOCENTES_INICIALES.forEach(d => map.set(d.id, d));
+      cloudList.forEach(d => {
+        if (d && d.id) map.set(d.id, d);
+      });
+      const merged = Array.from(map.values());
+      patch.docentes = merged;
+      persistDocentesCache(merged);
+    }
+
+    if (cloudFichas && Object.keys(cloudFichas).length > 0) {
+      patch.fichas = { ...FICHAS_ACADEMIA_DEFAULT, ...cloudFichas };
+    }
+
+    if (cloudOficio) {
+      patch.oficio = cloudOficio;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      updateDbState(patch);
     }
   });
 }

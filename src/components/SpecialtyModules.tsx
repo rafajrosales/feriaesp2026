@@ -624,13 +624,16 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
                     {/* Embedded Frame / Player */}
                     <div className="lg:col-span-8">
-                      <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-stone-800 shadow-inner group">
+                      <div className={`relative bg-black rounded-xl overflow-hidden border border-stone-800 shadow-inner group ${
+                        parsed.isShort ? 'mx-auto max-w-[340px] aspect-[9/16]' : 'aspect-video'
+                      }`}>
                         {parsed.type === 'youtube' || parsed.type === 'drive' ? (
                           <iframe
                             src={parsed.embedUrl}
                             title={videoInfo.titulo}
                             className="w-full h-full border-0"
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; webshare"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                            referrerPolicy="strict-origin-when-cross-origin"
                             allowFullScreen
                             onLoad={() => {
                               if (!currentProgress.video_visto) {
@@ -920,22 +923,45 @@ export const SpecialtyModules: React.FC<SpecialtyModulesProps> = ({
 
                       if (activeLightboxItem.tipo === 'video' || parsed.type === 'youtube' || parsed.type === 'drive') {
                         return (
-                          <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-stone-800">
-                            {parsed.type === 'youtube' || parsed.type === 'drive' ? (
-                              <iframe
-                                src={parsed.embedUrl}
-                                title={activeLightboxItem.titulo}
-                                className="w-full h-full border-0"
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; webshare"
-                                allowFullScreen
-                              ></iframe>
-                            ) : (
-                              <video
-                                src={parsed.embedUrl}
-                                controls
-                                className="w-full h-full"
-                                autoPlay
-                              ></video>
+                          <div className="space-y-2.5">
+                            <div
+                              className={`relative bg-black rounded-xl overflow-hidden border border-stone-800 ${
+                                parsed.isShort
+                                  ? 'mx-auto w-full max-w-[340px] aspect-[9/16]'
+                                  : 'aspect-video w-full'
+                              }`}
+                            >
+                              {parsed.type === 'youtube' || parsed.type === 'drive' ? (
+                                <iframe
+                                  src={parsed.embedUrl}
+                                  title={activeLightboxItem.titulo}
+                                  className="w-full h-full border-0"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                  referrerPolicy="strict-origin-when-cross-origin"
+                                  allowFullScreen
+                                ></iframe>
+                              ) : (
+                                <video
+                                  src={parsed.embedUrl}
+                                  controls
+                                  playsInline
+                                  className="w-full h-full"
+                                  autoPlay
+                                ></video>
+                              )}
+                            </div>
+                            {parsed.directUrl && (
+                              <div className="flex justify-center">
+                                <a
+                                  href={parsed.directUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-300 hover:text-amber-200 underline"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  Abrir en {parsed.providerLabel}
+                                </a>
+                              </div>
                             )}
                           </div>
                         );

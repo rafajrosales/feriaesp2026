@@ -4,25 +4,22 @@ export interface ParsedMedia {
   directUrl: string;
   thumbnailUrl?: string;
   providerLabel: string;
+  isShort?: boolean;
 }
 
 /**
- * Extracts YouTube Video ID from various URL formats
+ * Extracts YouTube Video ID from various URL formats (watch, embed, youtu.be, shorts, live)
  */
 export function extractYouTubeId(url: string): string | null {
   if (!url) return null;
   const cleanUrl = url.trim();
-  
-  // Standard watch URL: youtube.com/watch?v=ID
-  const watchMatch = cleanUrl.match(/(?:youtube\.com\/(?:watch\?.*v=|embed\/|v\/)|youtu\.be\/)([\w-]{11})/i);
-  if (watchMatch && watchMatch[1]) {
-    return watchMatch[1];
-  }
 
-  // Short URL or path: youtu.be/ID
-  const shortMatch = cleanUrl.match(/youtu\.be\/([\w-]{11})/i);
-  if (shortMatch && shortMatch[1]) {
-    return shortMatch[1];
+  // Match youtube.com/watch?v=, /embed/, /v/, /shorts/, /live/ or youtu.be/
+  const match = cleanUrl.match(
+    /(?:(?:www\.|m\.)?youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/)|youtu\.be\/)([\w-]{11})/i
+  );
+  if (match && match[1]) {
+    return match[1];
   }
 
   return null;
@@ -65,15 +62,19 @@ export function parseEmbedMediaUrl(url: string, forceType?: 'video' | 'foto'): P
 
   const cleanUrl = url.trim();
 
-  // 1. YouTube
+  // 1. YouTube (including YouTube Shorts)
   const youtubeId = extractYouTubeId(cleanUrl);
   if (youtubeId) {
+    const isShort = /youtube\.com\/shorts\//i.test(cleanUrl);
     return {
       type: 'youtube',
-      embedUrl: `https://www.youtube-nocookie.com/embed/${youtubeId}?rel=0&modestbranding=1`,
-      directUrl: `https://www.youtube.com/watch?v=${youtubeId}`,
-      thumbnailUrl: `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,
-      providerLabel: 'YouTube'
+      embedUrl: `https://www.youtube.com/embed/${youtubeId}?rel=0&modestbranding=1`,
+      directUrl: isShort
+        ? `https://www.youtube.com/shorts/${youtubeId}`
+        : `https://www.youtube.com/watch?v=${youtubeId}`,
+      thumbnailUrl: `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`,
+      providerLabel: isShort ? 'YouTube Short' : 'YouTube',
+      isShort
     };
   }
 
