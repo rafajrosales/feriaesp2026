@@ -70,9 +70,9 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
 
   const [nombreCompleto, setNombreCompleto] = useState('');
   const [curp, setCurp] = useState('');
-  const [numControl, setNumControl] = useState('');
   const [grupo, setGrupo] = useState('1°A');
   const [telefonoAlumno, setTelefonoAlumno] = useState('');
+  const [correoAlumno, setCorreoAlumno] = useState('');
 
   const [nombreTutor, setNombreTutor] = useState('');
   const [parentesco, setParentesco] = useState<'Padre' | 'Madre' | 'Tutor Legal'>('Padre');
@@ -138,9 +138,9 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
 
     setNombreCompleto(selectedNombre);
     setCurp(`${initials}090815HDFRLA${randomSuffix.toString().slice(0, 2)}`);
-    setNumControl(`2631607001${randomSuffix}`);
     setGrupo('1°C');
     setTelefonoAlumno('55 3456 7890');
+    setCorreoAlumno(`alumno.${selectedNombre.split(' ')[0].toLowerCase()}@gmail.com`);
     setNombreTutor('Lic. Juan Manuel Soto');
     setParentesco('Padre');
     setCorreoTutor(`tutor.${selectedNombre.split(' ')[0].toLowerCase()}@gmail.com`);
@@ -173,27 +173,14 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
       return;
     }
 
-    if (!numControl.trim() || numControl.trim().length < 8) {
-      setErrorMsg('El número de control escolar debe contener al menos 8 dígitos.');
-      return;
-    }
-
     setSubmitting(true);
     try {
-      const [curpCheck, ncCheck] = await Promise.all([
-        cloudCheckCurpAvailable(cleanCurp),
-        cloudCheckNumControlAvailable(numControl.trim())
-      ]);
+      const curpCheck = await cloudCheckCurpAvailable(cleanCurp);
 
       if (!curpCheck.available) {
         setErrorMsg(
-          `Esta CURP ya está registrada en la base única de Firebase (Núm. Control: ${curpCheck.numControl || 'asignado'}). Si es tu matrícula, ingresa con la cuenta Google que usaste al registrarte.`
+          `Esta CURP ya está registrada en la base única de Firebase. Si es tu matrícula, ingresa con la cuenta Google que usaste al registrarte.`
         );
-        return;
-      }
-
-      if (!ncCheck.available) {
-        setErrorMsg(`El Número de Control ${numControl.trim()} ya se encuentra registrado en Firebase.`);
         return;
       }
 
@@ -232,13 +219,15 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
       verificado: false
     };
 
+    const generatedNC = `2631607${cleanCurp.slice(0, 4)}${Math.floor(100 + Math.random() * 900)}`;
+
     const nuevoEstudiante: Estudiante = {
-      num_control: numControl.trim(),
+      num_control: generatedNC,
       nombre_completo: nombreCompleto.trim(),
       grupo,
       turno: 'MATUTINO',
-      curp: curp.trim().toUpperCase(),
-      correo_institucional: `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${numControl.trim().slice(-4)}@cetis7.edu.mx`,
+      curp: cleanCurp,
+      correo_institucional: correoAlumno.trim() ? correoAlumno.trim().toLowerCase() : `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${generatedNC.slice(-4)}@cetis7.edu.mx`,
       telefono_alumno: telefonoAlumno.trim(),
       tutor: tutorObj
     };
@@ -686,22 +675,22 @@ export const MandatoryRegistrationGate: React.FC<MandatoryRegistrationGateProps>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-bold text-stone-800 mb-1">
-                          Número de Control Escolar *
+                          Correo Electrónico del Alumno (si se solicita)
                         </label>
                         <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          required
-                          placeholder="Ej. 26316070010042"
-                          value={numControl}
-                          onChange={e => setNumControl(e.target.value.replace(/\D/g, ''))}
-                          className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code font-bold border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
+                          type="email"
+                          inputMode="email"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          placeholder="Ej. alumno@gmail.com"
+                          value={correoAlumno}
+                          onChange={e => setCorreoAlumno(e.target.value)}
+                          className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm font-mono-code border border-stone-300 rounded-xl focus:ring-2 focus:ring-[#721B32] focus:outline-none bg-white shadow-2xs"
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-stone-800 mb-1">
-                          Teléfono Celular del Alumno
+                          Teléfono Celular del Alumno (o Teléfono)
                         </label>
                         <input
                           type="tel"

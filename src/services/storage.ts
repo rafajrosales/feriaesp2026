@@ -1052,7 +1052,7 @@ export async function registrarNuevoEstudiante(estudiante: Estudiante): Promise<
   estudiante?: Estudiante;
 }> {
   const cleanCurp = estudiante.curp.trim().toUpperCase();
-  const cleanNC = estudiante.num_control.trim();
+  const cleanNC = (estudiante.num_control && estudiante.num_control.trim()) || `2631607${cleanCurp.slice(0, 4)}${Math.floor(100 + Math.random() * 900)}`;
 
   const curpCheck = validarCURP(cleanCurp);
   if (!curpCheck.valido) {

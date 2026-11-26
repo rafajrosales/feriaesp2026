@@ -19,10 +19,10 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
   const [paso, setPaso] = useState<1 | 2>(1);
 
   const [nombreCompleto, setNombreCompleto] = useState('');
-  const [numControl, setNumControl] = useState('');
   const [curp, setCurp] = useState('');
   const [grupo, setGrupo] = useState('1°A');
   const [telefonoAlumno, setTelefonoAlumno] = useState('');
+  const [correoAlumno, setCorreoAlumno] = useState('');
 
   const [nombreTutor, setNombreTutor] = useState('');
   const [parentesco, setParentesco] = useState<'Padre' | 'Madre' | 'Tutor Legal'>('Padre');
@@ -37,10 +37,10 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
   const handleAutocompletarPrueba = () => {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     setNombreCompleto('Mariana Guadalupe Sánchez Cruz');
-    setNumControl(`2631607001${randomSuffix}`);
     setCurp(`SACM090714HDFRLA${randomSuffix.toString().slice(0, 2)}`);
     setGrupo('1°B');
     setTelefonoAlumno('55 4321 8765');
+    setCorreoAlumno('mariana.sanchez@gmail.com');
     setNombreTutor('Lic. Roberto Sánchez Morales');
     setParentesco('Padre');
     setCorreoTutor('roberto.sanchez.tutor@gmail.com');
@@ -67,25 +67,13 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
       return;
     }
 
-    if (!numControl.trim() || numControl.trim().length < 8) {
-      setErrorMsg('El número de control debe contener al menos 8 a 14 dígitos.');
-      return;
-    }
-
     setSubmitting(true);
     try {
-      const [curpCheck, ncCheck] = await Promise.all([
-        cloudCheckCurpAvailable(curp),
-        cloudCheckNumControlAvailable(numControl)
-      ]);
+      const cleanCurp = curp.trim().toUpperCase();
+      const curpCheck = await cloudCheckCurpAvailable(cleanCurp);
 
       if (!curpCheck.available) {
-        setErrorMsg(`Esta CURP ya se encuentra registrada en la base única de Firebase (Núm. Control: ${curpCheck.numControl || 'asignado'}). Solo se permite un registro por alumno.`);
-        return;
-      }
-
-      if (!ncCheck.available) {
-        setErrorMsg(`El Número de Control "${numControl.trim()}" ya se encuentra asignado en Firebase.`);
+        setErrorMsg(`Esta CURP ya se encuentra registrada en la base única de Firebase. Solo se permite un registro por alumno.`);
         return;
       }
 
@@ -119,13 +107,16 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
       verificado: false
     };
 
+    const cleanCurp = curp.trim().toUpperCase();
+    const generatedNC = `2631607${cleanCurp.slice(0, 4)}${Math.floor(100 + Math.random() * 900)}`;
+
     const nuevoEstudiante: Estudiante = {
-      num_control: numControl.trim(),
+      num_control: generatedNC,
       nombre_completo: nombreCompleto.trim(),
       grupo,
       turno: 'MATUTINO',
-      curp: curp.trim().toUpperCase(),
-      correo_institucional: `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${numControl.slice(-4)}@cetis7.edu.mx`,
+      curp: cleanCurp,
+      correo_institucional: correoAlumno.trim() ? correoAlumno.trim().toLowerCase() : `${nombreCompleto.trim().toLowerCase().split(' ')[0]}.${generatedNC.slice(-4)}@cetis7.edu.mx`,
       telefono_alumno: telefonoAlumno.trim(),
       tutor: tutorObj
     };
@@ -237,35 +228,20 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-stone-800 block mb-1">Número de Control *</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    required
-                    value={numControl}
-                    onChange={e => setNumControl(e.target.value.replace(/\D/g, ''))}
-                    placeholder="ej. 26316070010042"
-                    className="w-full px-3.5 py-3 sm:py-2 border border-stone-300 rounded-xl bg-white text-base sm:text-sm font-mono-code font-bold shadow-2xs focus:ring-2 focus:ring-[#721B32] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-stone-800 block mb-1">CURP Oficial (18 caracteres) *</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={18}
-                    autoCapitalize="characters"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    value={curp}
-                    onChange={e => setCurp(e.target.value.toUpperCase())}
-                    placeholder="ej. MOSG090314HDFRLA01"
-                    className="w-full px-3.5 py-3 sm:py-2 border border-stone-300 rounded-xl bg-white text-base sm:text-sm font-mono-code font-bold tracking-wider shadow-2xs focus:ring-2 focus:ring-[#721B32] focus:outline-none"
-                  />
-                </div>
+              <div>
+                <label className="font-bold text-stone-800 block mb-1">CURP Oficial (18 caracteres) *</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={18}
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={curp}
+                  onChange={e => setCurp(e.target.value.toUpperCase())}
+                  placeholder="ej. MOSG090314HDFRLA01"
+                  className="w-full px-3.5 py-3 sm:py-2 border border-stone-300 rounded-xl bg-white text-base sm:text-sm font-mono-code font-bold tracking-wider shadow-2xs focus:ring-2 focus:ring-[#721B32] focus:outline-none"
+                />
               </div>
 
               <div>
@@ -293,17 +269,32 @@ export const StudentSelfRegistrationModal: React.FC<StudentSelfRegistrationModal
                 </div>
               </div>
 
-              <div>
-                <label className="font-bold text-stone-800 block mb-1">Teléfono Celular del Alumno (Opcional):</label>
-                <input
-                  type="tel"
-                  inputMode="tel"
-                  autoComplete="tel"
-                  value={telefonoAlumno}
-                  onChange={e => setTelefonoAlumno(e.target.value)}
-                  placeholder="ej. 55 1234 5678"
-                  className="w-full px-3.5 py-3 sm:py-2 border border-stone-300 rounded-xl bg-white text-base sm:text-sm font-mono-code shadow-2xs focus:ring-2 focus:ring-[#721B32] focus:outline-none"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-stone-800 block mb-1">Correo Electrónico del Alumno (si se solicita):</label>
+                  <input
+                    type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    value={correoAlumno}
+                    onChange={e => setCorreoAlumno(e.target.value)}
+                    placeholder="ej. alumno@gmail.com"
+                    className="w-full px-3.5 py-3 sm:py-2 border border-stone-300 rounded-xl bg-white text-base sm:text-sm font-mono-code shadow-2xs focus:ring-2 focus:ring-[#721B32] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-stone-800 block mb-1">Teléfono Celular del Alumno (o Teléfono):</label>
+                  <input
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    value={telefonoAlumno}
+                    onChange={e => setTelefonoAlumno(e.target.value)}
+                    placeholder="ej. 55 1234 5678"
+                    className="w-full px-3.5 py-3 sm:py-2 border border-stone-300 rounded-xl bg-white text-base sm:text-sm font-mono-code shadow-2xs focus:ring-2 focus:ring-[#721B32] focus:outline-none"
+                  />
+                </div>
               </div>
 
               {errorMsg && (
